@@ -1131,8 +1131,8 @@ public:
 
     Tini = astart < adec ? Tcmb0 / astart : Tcmb0 / astart / astart * adec;
 
-    // calculate softening suggestion
-    softening = (boxSize * posFac) / pow(2, levelmax_) / 40.0;
+    // calculate softening suggestion from the mean high-res DM spacing
+    softening = (boxSize * posFac) / pow(2, levelmax_) / std::cbrt(pmask.dm_fraction()) / 40.0;
 
     if (coarsePartType == GAS_PARTTYPE || coarsePartType == HIGHRES_DM_PARTTYPE)
       throw std::runtime_error("Error: Specified illegal Swift particle type for coarse particles.");
