@@ -70,7 +70,25 @@ extern "C"
     int layer_min, layer_max, hoswitch;
     }oct_range_;
   */
+
+  // high-order PANPHASIA (ext/panphasia_ho), used for descriptors other than Panph1
+  int parse_and_validate_descriptor_(const char *descriptor, int *pan_mode);
+  int PANPHASIA_init_descriptor_(const char *descriptor, int *verbose);
+  int PANPHASIA_init_level_(size_t *rel_lev, size_t *rel_orig_x, size_t *rel_orig_y, size_t *rel_orig_z, int *verbose);
+  int PANPHASIA_compute_coefficients_(size_t *xstart, size_t *ystart, size_t *zstart, size_t *xextent,
+                                      size_t *yextent, size_t *zextent, size_t *copy_list, size_t *ncopy,
+                                      void *output_values, int *flag_output_mode, int *verbose);
+  void compute_sph_bessel_coeffs(int nfft, int pmax, int n4dimen, int fdim, std::complex<double> *sph_bessel_coeff);
+  extern size_t descriptor_order, descriptor_base_size, descriptor_kk_limit;
+  extern const int irank_p[3][84];
 }
+
+// precision of the high-order PANPHASIA coefficients, as set in panphasia_functions.h
+#ifdef USE_PRECISION_FLOAT
+using pan_real_t = float;
+#else
+using pan_real_t = double;
+#endif
 
 class RNG_panphasia : public RNG_plugin
 {
@@ -95,6 +113,7 @@ protected:
   int ix_abs_[3], ix_per_[3], ix_rel_[3], level_p_, lextra_;
   const refinement_hierarchy *prefh_;
   std::array<int,3> margins_;
+  bool high_order_; // descriptor is not Panph1, use ext/panphasia_ho
 
   struct panphasia_descriptor
   {
@@ -159,6 +178,9 @@ public:
   explicit RNG_panphasia(config_file &cf) : RNG_plugin(cf)
   {
     descriptor_string_ = pcf_->get_value<std::string>("random", "descriptor");
+    // the descriptor parsers do not skip blanks between fields
+    descriptor_string_.erase(std::remove_if(descriptor_string_.begin(), descriptor_string_.end(), ::isspace),
+                             descriptor_string_.end());
 
 #ifdef _OPENMP
     num_threads_ = omp_get_max_threads();
@@ -168,6 +190,25 @@ public:
 
     // create independent state descriptions for each thread
     lstate = new pan_state_[num_threads_];
+
+    high_order_ = descriptor_string_.compare(0, 8, "[Panph1,") != 0;
+    if (high_order_)
+    {
+      int pan_mode, verbose = 1;
+      if (int err = parse_and_validate_descriptor_(descriptor_string_.c_str(), &pan_mode))
+        throw std::runtime_error("PANPHASIA: invalid descriptor '" + descriptor_string_ + "' (error " + std::to_string(err) + ")");
+      if (descriptor_order != 6)
+        throw std::runtime_error("PANPHASIA: only Panph1 and Panph6 descriptors are supported");
+      if (descriptor_base_size & (descriptor_base_size - 1))
+        throw std::runtime_error("PANPHASIA: Panph6 descriptors need a power-of-two base size S");
+      PANPHASIA_init_descriptor_(descriptor_string_.c_str(), &verbose);
+      music::ilog.Print("PANPHASIA: high-order descriptor \'%s\' is base %zu", descriptor_string_.c_str(), descriptor_base_size);
+
+      pcf_->insert_value("setup", "gridding_unit", "2");
+      pcf_->insert_value("random", "base_unit", std::to_string(descriptor_base_size));
+      pcf_->insert_value("setup", "fourier_splicing", "false");
+      return;
+    }
 
     // parse the descriptor for its properties
     pdescriptor_ = new panphasia_descriptor(descriptor_string_);
@@ -200,6 +241,21 @@ public:
       margins_ = { refh.get_margin(), refh.get_margin(), refh.get_margin() };
     }
 
+    coordinate_system_shift_[0] = -pcf_->get_value<int>("setup", "shift_x");
+    coordinate_system_shift_[1] = -pcf_->get_value<int>("setup", "shift_y");
+    coordinate_system_shift_[2] = -pcf_->get_value<int>("setup", "shift_z");
+
+    if (high_order_)
+    {
+      // KK fixes the amplitudes of |k|^2 <= KK on the periodic top grid
+      size_t nhalf = size_t(1) << (levelmin_ - 1);
+      if (descriptor_kk_limit >= nhalf * nhalf)
+        throw std::runtime_error("PANPHASIA: levelmin is too small for the descriptor's KK" + std::to_string(descriptor_kk_limit));
+      if (descriptor_kk_limit > 0 && pcf_->get_value_safe<bool>("setup", "fix_mode_amplitude", false))
+        throw std::runtime_error("PANPHASIA: fix_mode_amplitude cannot be combined with a KK descriptor");
+      return;
+    }
+
     clear_panphasia_thread_states();
     music::ilog.Print("PANPHASIA: running with %d threads", num_threads_);
 
@@ -212,10 +268,6 @@ public:
     lextra_ = (log10((double)ngrid_ / (double)pdescriptor_->i_base) + 0.001) / log10(2.0);
     int ratio = 1 << lextra_;
     grid_rescale_fac_ = 1.0;
-
-    coordinate_system_shift_[0] = -pcf_->get_value<int>("setup", "shift_x");
-    coordinate_system_shift_[1] = -pcf_->get_value<int>("setup", "shift_y");
-    coordinate_system_shift_[2] = -pcf_->get_value<int>("setup", "shift_z");
 
     incongruent_fields_ = false;
     if (ngrid_ != ratio * pdescriptor_->i_base)
@@ -232,6 +284,7 @@ public:
   ~RNG_panphasia() { delete[] lstate; }
 
   void fill_grid(int level, DensityGrid<real_t> &R);
+  void fill_grid_high_order(int level, DensityGrid<real_t> &R);
 
   bool is_multiscale() const { return true; }
 };
@@ -262,6 +315,9 @@ void RNG_panphasia::backward_transform_field(real_t *field, int nx, int ny, int 
 
 void RNG_panphasia::fill_grid(int level, DensityGrid<real_t> &R)
 {
+  if (high_order_)
+    return fill_grid_high_order(level, R);
+
   real_t *pr0, *pr1, *pr2, *pr3, *pr4;
   complex_t *pc0, *pc1, *pc2, *pc3, *pc4;
 
@@ -832,6 +888,164 @@ void RNG_panphasia::fill_grid(int level, DensityGrid<real_t> &R)
 
   music::ilog << "PANPHASIA level " << level << " mean and variance are" << std::endl
               << "       <p> = "<< sum << " | var(p) = " << sum2 << std::endl;
+}
+
+/*
+ * Serial, per-patch version of PANPHASIA_compute_kspace_field_ from monofonIC's pan_mpi_routines.c.
+ * The 84 Legendre coefficients of each PANPHASIA cell are placed on every other point of the
+ * Fourier grid (fdim = 2), transformed, weighted by spherical Bessel functions and summed. The
+ * top level is the whole periodic box; finer levels use the padded patch, which is treated as
+ * periodic like in the Panph1 path. Only its long-wavelength modes are then inexact, and those are
+ * replaced by the coarser level's when the levels are spliced together.
+ */
+void RNG_panphasia::fill_grid_high_order(int level, DensityGrid<real_t> &R)
+{
+  const int fdim = 2, pmax = 6, nbasis = 84;
+  const long nlevel = 1L << level;
+
+  // Fourier grid size n, coefficient-cell origin and the offset e of R inside the Fourier grid
+  int n[3], e[3];
+  size_t origin[3], extent[3];
+  for (int k = 0; k < 3; ++k)
+  {
+    // R's corner in the unshifted box, in cells of this level
+    long shift = coordinate_system_shift_[k] * nlevel;
+    if (shift % (1L << levelmin_final_))
+      throw std::runtime_error("PANPHASIA: coordinate shift is not a whole number of cells on this level");
+    long corner = shift / (1L << levelmin_final_);
+    if (level != levelmin_)
+      corner += prefh_->offset_abs(level, k) - (margins_[k] < 0 ? long(R.size(k)) / 4 : margins_[k]);
+    corner = ((corner % nlevel) + nlevel) % nlevel;
+
+    if (level == levelmin_)
+    {
+      // periodic: compute the box from the origin and roll by the corner
+      n[k] = nlevel;
+      e[k] = corner;
+      origin[k] = 0;
+    }
+    else
+    {
+      // coefficient cells span two cells, so start one cell early if the corner is odd
+      e[k] = corner % 2;
+      n[k] = R.size(k) + 2 * e[k];
+      origin[k] = (corner - e[k]) / 2;
+    }
+    extent[k] = n[k] / 2;
+  }
+
+  // the coefficient grid, base_size << rel_level, is half the level grid
+  int log2_base = 0;
+  while ((size_t(1) << log2_base) < descriptor_base_size)
+    ++log2_base;
+  size_t rel_level = level - 1 - log2_base, zero = 0;
+  int verbose = 0, err;
+  if (level - 1 < log2_base || (err = PANPHASIA_init_level_(&rel_level, &zero, &zero, &zero, &verbose)))
+    throw std::runtime_error("PANPHASIA: cannot set up level " + std::to_string(level) + " for this descriptor");
+
+  music::ilog.Print("calculating high-order PANPHASIA random numbers for level %d...", level);
+  double tstart = get_wtime();
+
+  std::vector<pan_real_t> coeff(nbasis * extent[0] * extent[1] * extent[2]);
+  std::vector<size_t> copy_list(nbasis);
+  for (int i = 0; i < nbasis; ++i)
+    copy_list[i] = i;
+  size_t ncopy = nbasis;
+  int flag_output_mode = 0;
+  if ((err = PANPHASIA_compute_coefficients_(&origin[0], &origin[1], &origin[2], &extent[0], &extent[1], &extent[2],
+                                             copy_list.data(), &ncopy, coeff.data(), &flag_output_mode, &verbose)))
+    throw std::runtime_error("PANPHASIA: computing coefficients failed (error " + std::to_string(err) + ")");
+
+  std::vector<std::complex<double>> bessel[3];
+  for (int k = 0; k < 3; ++k)
+  {
+    bessel[k].resize((pmax + 1) * n[k]);
+    compute_sph_bessel_coeffs(n[k], pmax, n[k], fdim, bessel[k].data());
+  }
+
+  const size_t nzp = n[2] + 2, nzc = n[2] / 2 + 1, nc = size_t(n[0]) * n[1] * nzc;
+  std::vector<real_t> grid(size_t(n[0]) * n[1] * nzp);
+  complex_t *cgrid = reinterpret_cast<complex_t *>(grid.data());
+  std::vector<std::complex<double>> field(nc);
+  std::vector<double> weight2(nc);
+
+  fftw_plan_t pf = FFTW_API(plan_dft_r2c_3d)(n[0], n[1], n[2], grid.data(), cgrid, FFTW_ESTIMATE);
+  fftw_plan_t pb = FFTW_API(plan_dft_c2r_3d)(n[0], n[1], n[2], cgrid, grid.data(), FFTW_ESTIMATE);
+
+  for (int b = 0; b < nbasis; ++b)
+  {
+    std::fill(grid.begin(), grid.end(), real_t(0));
+#pragma omp parallel for
+    for (size_t x = 0; x < extent[0]; ++x)
+      for (size_t y = 0; y < extent[1]; ++y)
+        for (size_t z = 0; z < extent[2]; ++z)
+          grid[(fdim * x * n[1] + fdim * y) * nzp + fdim * z] = coeff[nbasis * ((x * extent[1] + y) * extent[2] + z) + b];
+
+    FFTW_API(execute)(pf);
+
+    const std::complex<double> *bx = &bessel[0][irank_p[0][b] * n[0]], *by = &bessel[1][irank_p[1][b] * n[1]],
+                               *bz = &bessel[2][irank_p[2][b] * n[2]];
+#pragma omp parallel for
+    for (int i = 0; i < n[0]; ++i)
+      for (int j = 0; j < n[1]; ++j)
+        for (size_t k = 0; k < nzc; ++k)
+        {
+          size_t idx = (size_t(i) * n[1] + j) * nzc + k;
+          std::complex<double> w = bx[i] * by[j] * bz[k];
+          field[idx] += w * std::complex<double>(RE(cgrid[idx]), IM(cgrid[idx]));
+          weight2[idx] += std::norm(w);
+        }
+  }
+
+  // phase shift and normalisation as in monofonIC (including the weight inside the phase),
+  // KK amplitude fixing on the periodic top level only
+  const bool fix_kk = level == levelmin_ && descriptor_kk_limit > 0;
+  const double ntot = double(n[0]) * n[1] * n[2];
+#pragma omp parallel for
+  for (int i = 0; i < n[0]; ++i)
+    for (int j = 0; j < n[1]; ++j)
+      for (size_t k = 0; k < nzc; ++k)
+      {
+        size_t idx = (size_t(i) * n[1] + j) * nzc + k;
+        long kx = (i > n[0] / 2) ? i - n[0] : i, ky = (j > n[1] / 2) ? j - n[1] : j, kz = k;
+        std::complex<double> x = 0.0;
+        if (kx != n[0] / 2 && ky != n[1] / 2 && kz != n[2] / 2)
+        {
+          double phase = -fdim * M_PI * (double(kx) / n[0] + double(ky) / n[1] + double(kz) / n[2]) / std::sqrt(weight2[idx]);
+          x = field[idx] * std::sqrt(double(fdim * fdim * fdim) / ntot) * std::polar(1.0, phase);
+          size_t k2 = kx * kx + ky * ky + kz * kz;
+          if (fix_kk && k2 != 0 && k2 <= descriptor_kk_limit)
+            x /= std::abs(x);
+        }
+        RE(cgrid[idx]) = x.real();
+        IM(cgrid[idx]) = x.imag();
+      }
+
+  FFTW_API(execute)(pb);
+  FFTW_API(destroy_plan)(pf);
+  FFTW_API(destroy_plan)(pb);
+
+  // unit variance per cell
+  const double norm = 1.0 / std::sqrt(ntot);
+  const int nx = R.size(0), ny = R.size(1), nz = R.size(2);
+  double sum = 0.0, sum2 = 0.0;
+#pragma omp parallel for reduction(+ : sum, sum2)
+  for (int i = 0; i < nx; ++i)
+    for (int j = 0; j < ny; ++j)
+      for (int k = 0; k < nz; ++k)
+      {
+        size_t idx = (size_t((i + e[0]) % n[0]) * n[1] + (j + e[1]) % n[1]) * nzp + (k + e[2]) % n[2];
+        R(i, j, k) = grid[idx] * norm;
+        sum += R(i, j, k);
+        sum2 += R(i, j, k) * R(i, j, k);
+      }
+  double count = double(nx) * ny * nz;
+  sum /= count;
+  sum2 = sum2 / count - sum * sum;
+
+  music::ulog.Print("time for high-order PANPHASIA on level %d : %f s", level, get_wtime() - tstart);
+  music::ilog << "PANPHASIA level " << level << " mean and variance are" << std::endl
+              << "       <p> = " << sum << " | var(p) = " << sum2 << std::endl;
 }
 
 namespace
