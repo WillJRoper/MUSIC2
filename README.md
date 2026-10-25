@@ -51,7 +51,7 @@ Select PANPHASIA with
 generator  = PANPHASIA
 descriptor = [Panph6,L18,(56034,71400,250000),S1,KK1025,CH3774755196,Flamingo_Gpc1]
 ```
-Both original `Panph1` descriptors and high-order `Panph6` descriptors (such as FLAMINGO's) are supported; spaces inside the descriptor are ignored. On a uniform grid, `Panph6` white noise is identical to monofonIC's. In zooms each refinement patch is computed on its padded region, and its long-wavelength modes are replaced by those of the coarser level.
+Both original `Panph1` descriptors and high-order `Panph6` descriptors (such as FLAMINGO's) are supported; spaces inside the descriptor are ignored. `Panph6` white noise is monofonIC's field sampled at cell centres, where MUSIC places its particles (monofonIC places them at cell corners), on every refinement level. In zooms each refinement patch is computed on its padded region, and its long-wavelength modes are replaced by those of the coarser level.
 
 For `Panph6` descriptors:
 - the base size `S` must be a power of two;
