@@ -118,8 +118,10 @@ block-centre cell and dark matter in the corner cell plus the edge-centre
 cells (`ParticleMaskType` bit 0) and/or face-centre cells (bit 1), giving
 DM:gas ratios of 1:1, 4:1, 4:1, or 7:1 for types 0 to 3. Gas is not staggered,
 particle masses are scaled so each species keeps its total mass, and the gas
-smoothing length is the 2-cell gas spacing. Coarse levels are unchanged. The
-masked load is not available for other output formats or glass loads.
+smoothing length is the 2-cell gas spacing. Coarse levels still hold
+total-matter particles. The masked load is not available for other output
+formats or glass loads; `ParticleLoad` accepts only `sc` (the default) and
+`masked`, and `masked` is ignored with a warning when baryons are disabled.
 
 Use `python3 tests/scripts/check_swift_masked.py ics_swift.hdf5 <type>
 [unmasked.hdf5]` on ICs generated at a high starting redshift to check

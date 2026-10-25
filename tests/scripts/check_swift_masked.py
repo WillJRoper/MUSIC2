@@ -29,7 +29,8 @@ def check(path, mask_type, reference=None):
         assert n_dm == DM_PER_BLOCK[mask_type] * n_gas, (n_dm, n_gas)
 
         # gas lives on cell centres of the odd (i,j,k) cell in each block,
-        # i.e. at 1.5 dx modulo 2 dx
+        # i.e. at 1.5 dx modulo 2 dx (MUSIC keeps absolute grid offsets even,
+        # so local and global cell parity agree)
         residual = np.mod(gas - 1.5 * dx + dx, 2 * dx) - dx
         assert np.abs(residual).max() < 0.25 * dx, np.abs(residual).max()
 
