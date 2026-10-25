@@ -1030,6 +1030,8 @@ void RNG_panphasia::fill_grid_high_order(int level, DensityGrid<real_t> &R)
             kk_modes_.push_back({int(kx), int(ky), int(kz), fixed - x});
             x = fixed;
           }
+          // sample cell centres, which MUSIC assumes when it combines levels
+          x *= std::polar(1.0, M_PI * (double(kx) / n[0] + double(ky) / n[1] + double(kz) / n[2]));
         }
         RE(cgrid[idx]) = x.real();
         IM(cgrid[idx]) = x.imag();
@@ -1073,7 +1075,7 @@ void RNG_panphasia::fill_grid_high_order(int level, DensityGrid<real_t> &R)
  * The KK modes are fixed on the periodic top level only. Finer patches would otherwise keep the
  * unfixed amplitudes in the band where MUSIC blends coarse and fine modes, so the top level's
  * changes are added to each patch as plane waves of the box. They are summed one axis at a time
- * over the patch cells, whose first cell sits at absolute index corner on this level.
+ * over the centres of the patch cells, whose first cell has absolute index corner on this level.
  */
 std::vector<double> RNG_panphasia::kk_correction(int level, int nx, int ny, int nz, std::array<long, 3> corner) const
 {
@@ -1098,14 +1100,14 @@ std::vector<double> RNG_panphasia::kk_correction(int level, int nx, int ny, int 
   for (size_t p = 0; p < npair; ++p)
     for (size_t m = pair_start[p]; m < pair_start[p + 1]; ++m)
       for (int z = 0; z < nz; ++z)
-        a[p * nz + z] += (kk_modes_[m].kz ? 2.0 : 1.0) * kk_modes_[m].dc * std::polar(1.0, dphi * kk_modes_[m].kz * (corner[2] + z));
+        a[p * nz + z] += (kk_modes_[m].kz ? 2.0 : 1.0) * kk_modes_[m].dc * std::polar(1.0, dphi * kk_modes_[m].kz * (corner[2] + z + 0.5));
 
 #pragma omp parallel for
   for (size_t q = 0; q < nkx; ++q)
     for (size_t p = kx_start[q]; p < kx_start[q + 1]; ++p)
       for (int y = 0; y < ny; ++y)
       {
-        std::complex<double> phase = std::polar(1.0, dphi * kk_modes_[pair_start[p]].ky * (corner[1] + y));
+        std::complex<double> phase = std::polar(1.0, dphi * kk_modes_[pair_start[p]].ky * (corner[1] + y + 0.5));
         for (int z = 0; z < nz; ++z)
           b[(q * ny + y) * nz + z] += a[p * nz + z] * phase;
       }
@@ -1117,7 +1119,7 @@ std::vector<double> RNG_panphasia::kk_correction(int level, int nx, int ny, int 
   for (int x = 0; x < nx; ++x)
     for (size_t q = 0; q < nkx; ++q)
     {
-      std::complex<double> phase = scale * std::polar(1.0, dphi * kk_modes_[pair_start[kx_start[q]]].kx * (corner[0] + x));
+      std::complex<double> phase = scale * std::polar(1.0, dphi * kk_modes_[pair_start[kx_start[q]]].kx * (corner[0] + x + 0.5));
       for (int y = 0; y < ny; ++y)
         for (int z = 0; z < nz; ++z)
           delta[(size_t(x) * ny + y) * nz + z] += std::real(b[(q * ny + y) * nz + z] * phase);
