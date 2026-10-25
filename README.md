@@ -100,6 +100,32 @@ support. Use `python3 tests/scripts/check_swift_cells.py ics_swift.hdf5` to
 check cell counts, offsets, ordering, metadata, and (when installed) swiftsimio
 loading. The checker requires `h5py` and `numpy`; `swiftsimio` is optional.
 
+### Masked particle load
+
+By default the high-resolution region holds one dark matter and one gas
+particle per finest-level cell, with the gas staggered by half a cell. With
+baryons enabled, the SWIFT plugin can instead use monofonIC's masked load:
+
+```
+[setup]
+baryons          = yes
+ParticleLoad     = masked
+ParticleMaskType = 3
+```
+
+Each 2x2x2 block of finest-level cells then holds one gas particle in the
+block-centre cell and dark matter in the corner cell plus the edge-centre
+cells (`ParticleMaskType` bit 0) and/or face-centre cells (bit 1), giving
+DM:gas ratios of 1:1, 4:1, 4:1, or 7:1 for types 0 to 3. Gas is not staggered,
+particle masses are scaled so each species keeps its total mass, and the gas
+smoothing length is the 2-cell gas spacing. Coarse levels are unchanged. The
+masked load is not available for other output formats or glass loads.
+
+Use `python3 tests/scripts/check_swift_masked.py ics_swift.hdf5 <type>
+[unmasked.hdf5]` on ICs generated at a high starting redshift to check
+particle counts, gas lattice positions, smoothing lengths, and (given an
+unmasked run with the same seeds) total masses.
+
 
 ## Disclaimer
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. By downloading and using MUSIC, you agree to the LICENSE, distributed with the source code in a text file of the same name.
