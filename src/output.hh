@@ -45,14 +45,18 @@ class particle_load_mask
 	}
 
 public:
-	bool enabled;
+	bool requested; //!< ParticleLoad = masked
+	bool enabled;	//!< requested and baryons enabled
 
 	explicit particle_load_mask(config_file &cf)
 	{
-		enabled = cf.get_value_safe<std::string>("setup", "ParticleLoad", "sc") == "masked" &&
-				  cf.get_value_safe<bool>("setup", "baryons", false);
+		const std::string load = cf.get_value_safe<std::string>("setup", "ParticleLoad", "sc");
+		if (load != "sc" && load != "masked")
+			throw std::runtime_error("ParticleLoad must be 'sc' or 'masked', got '" + load + "'");
+		requested = load == "masked";
+		enabled = requested && cf.get_value_safe<bool>("setup", "baryons", false);
 
-		unsigned mask_type = cf.get_value_safe<unsigned>("setup", "ParticleMaskType", 3);
+		unsigned mask_type = requested ? cf.get_value_safe<unsigned>("setup", "ParticleMaskType", 3) : 3;
 		if (mask_type > 3)
 			throw std::runtime_error("ParticleMaskType must be 0, 1, 2 or 3");
 

@@ -593,7 +593,10 @@ int main(int argc, char *argv[])
 	bool bdefd = true; // we set this by default and don't allow it to be changed outside any more
 	bool bglass = cf.get_value_safe<bool>("output", "glass", false);
 	bool bsph = cf.get_value_safe<bool>("setup", "do_SPH", false) && do_baryons;
-	bool bmasked = particle_load_mask(cf).enabled;
+	const particle_load_mask pmask(cf);
+	bool bmasked = pmask.enabled;
+	if (pmask.requested && !bmasked)
+		music::wlog.Print("ParticleLoad = masked ignored since baryons are disabled");
 	if (bmasked && (bglass || outformat != "swift"))
 		throw std::runtime_error("ParticleLoad = masked is only supported for output format 'swift' without glass");
 	// masked loads put gas on the unshifted lattice, so baryon fields must not be shifted by half a cell
