@@ -104,6 +104,7 @@ protected:
   int pmgrid, gridboost;
   float softening, Tini;
   double gamma, YHe, Tcmb0; //for gas properties
+  double gas_stagger; // gas offset in finest cells; matches the baryon field shift in convolution::perform
 
   using output_plugin::cf_;
 
@@ -949,7 +950,7 @@ protected:
               // is used when computing the convolution kernel for SPH baryons,
               // on every level); masked loads use the unshifted lattice
               if (!pmask.enabled)
-                xx[coord] += 0.5 * h;
+                xx[coord] += gas_stagger * h;
 
               xx[coord] = (xx[coord] + (*gh.get_grid(ilevel))(i, j, k)) * boxSize;
 
@@ -1048,6 +1049,10 @@ public:
     // bbshift=1 unless the particle load is masked
     // -> instead of just writing gas densities (which are here ignored), the gas displacements are also written
     cf.insert_value("setup", "do_SPH", "yes");
+    // main.cc switches the field shift off for glass loads (bbshift)
+    gas_stagger = cf.get_value_safe<bool>("output", "glass", false)
+                      ? 0.0
+                      : cf.get_value_safe<double>("setup", "baryon_staggering", 0.5);
 
     // init header and config parameters
     nPartTotal = std::vector<long long>(NTYPES, 0);
