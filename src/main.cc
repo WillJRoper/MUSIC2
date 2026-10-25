@@ -740,7 +740,8 @@ int main(int argc, char *argv[])
 				f.add_refinement_mask(rh_Poisson.get_coord_shift());
 				normalize_density(f);
 
-				if (!do_LLA)
+				// SPH outputs take the plain density here (the LLA branch below is skipped for them)
+				if (!do_LLA || bsph)
 				{
 					music::ulog.Print("Writing baryon density");
 					the_output_plugin->write_gas_density(f);
