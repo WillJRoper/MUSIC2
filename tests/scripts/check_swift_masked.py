@@ -6,7 +6,8 @@ Usage: check_swift_masked.py ics.hdf5 MASK_TYPE [UNMASKED_REFERENCE.hdf5]
 Checks the DM:gas ratio on the finest level, that every gas particle sits
 near the centre cell of its 2x2x2 block (generate at high zstart so
 displacements are small), and, given an unmasked run with the same seeds,
-that the total high-res mass per species and the coarse particles agree.
+that the total mass of every particle type agrees. Coarse positions and
+velocities are not compared: the masked load drops the gas staggering.
 """
 
 import sys

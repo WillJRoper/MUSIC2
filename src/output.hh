@@ -34,6 +34,10 @@
  * opposite the corner) and DM at the corner, plus the edge centres (ParticleMaskType bit 0) and/or
  * the face centres (bit 1). Remaining cells are left empty. Without baryons the load is plain SC.
  * Indices are local to the finest grid, which the refinement mask always fills in aligned 2x2x2 blocks.
+ *
+ * NOTE: for ParticleMaskType 0-2 a species can sit on a lattice coarser than the finest grid (gas
+ * always on a 2 dx lattice, type-0 DM too) while its fields carry power up to the dx Nyquist
+ * frequency, so small-scale power is aliased. monofonIC's masked load behaves the same way.
  */
 class particle_load_mask
 {

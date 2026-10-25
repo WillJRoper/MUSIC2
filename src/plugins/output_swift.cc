@@ -1044,7 +1044,8 @@ public:
     nranks_ = 1;
 #endif
 
-    // ensure that everyone knows we want to do SPH, implies: bsph=1, bbshift=1, decic_baryons=1
+    // ensure that everyone knows we want to do SPH, implies: bsph=1, decic_baryons=1, and
+    // bbshift=1 unless the particle load is masked
     // -> instead of just writing gas densities (which are here ignored), the gas displacements are also written
     cf.insert_value("setup", "do_SPH", "yes");
 
