@@ -55,7 +55,7 @@ Both original `Panph1` descriptors and high-order `Panph6` descriptors (such as 
 
 For `Panph6` descriptors:
 - the base size `S` must be a power of two;
-- a `KK` limit fixes the amplitudes of all modes with |k|² ≤ KK (in box units) on the top level, so `levelmin` must satisfy 2^(levelmin-1) > √KK, and `fix_mode_amplitude` cannot be used as well;
+- a `KK` limit fixes the amplitudes of all modes with |k|² ≤ KK (in box units). This is done on the periodic top level and carried into every refinement level, so `levelmin` must satisfy 2^(levelmin-1) > √KK, and `fix_mode_amplitude` cannot be used as well;
 - generating the noise needs roughly 200 bytes per cell of the largest padded refinement level.
 
 ## SWIFT output
