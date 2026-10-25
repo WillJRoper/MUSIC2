@@ -1358,6 +1358,13 @@ public:
 			music::ilog << "           right = [" << x1ref[0] << "," << x1ref[1] << "," << x1ref[2] << "]" << std::endl;
 
 			bhave_nref = the_region_generator->is_grid_dim_forced(lnref_);
+
+			// the finest grid is refined and masked in 2x2x2 blocks (see add_refinement_mask)
+			if (bhave_nref && (lnref_[0] % 2 || lnref_[1] % 2 || lnref_[2] % 2))
+			{
+				music::elog.Print("ref_dims must be even, got %d %d %d", (int)lnref_[0], (int)lnref_[1], (int)lnref_[2]);
+				throw std::runtime_error("ref_dims must be even");
+			}
 		}
 
 		// if not doing any refinement levels, set extent to full box
