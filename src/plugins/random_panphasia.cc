@@ -115,6 +115,14 @@ protected:
   std::array<int,3> margins_;
   bool high_order_; // descriptor is not Panph1, use ext/panphasia_ho
 
+  // KK amplitude changes (fixed minus unfixed) made on the top level, sorted by (kx, ky)
+  struct kk_mode
+  {
+    int kx, ky, kz;
+    std::complex<double> dc;
+  };
+  std::vector<kk_mode> kk_modes_;
+
   struct panphasia_descriptor
   {
     int16_t wn_level_base;
@@ -285,6 +293,7 @@ public:
 
   void fill_grid(int level, DensityGrid<real_t> &R);
   void fill_grid_high_order(int level, DensityGrid<real_t> &R);
+  std::vector<double> kk_correction(int level, int nx, int ny, int nz, std::array<long, 3> corner) const;
 
   bool is_multiscale() const { return true; }
 };
@@ -1015,7 +1024,12 @@ void RNG_panphasia::fill_grid_high_order(int level, DensityGrid<real_t> &R)
           x = field[idx] * std::sqrt(double(fdim * fdim * fdim) / ntot) * std::polar(1.0, phase);
           size_t k2 = kx * kx + ky * ky + kz * kz;
           if (fix_kk && k2 != 0 && k2 <= descriptor_kk_limit)
-            x /= std::abs(x);
+          {
+            std::complex<double> fixed = x / std::abs(x);
+#pragma omp critical
+            kk_modes_.push_back({int(kx), int(ky), int(kz), fixed - x});
+            x = fixed;
+          }
         }
         RE(cgrid[idx]) = x.real();
         IM(cgrid[idx]) = x.imag();
@@ -1025,9 +1039,16 @@ void RNG_panphasia::fill_grid_high_order(int level, DensityGrid<real_t> &R)
   FFTW_API(destroy_plan)(pf);
   FFTW_API(destroy_plan)(pb);
 
+  const int nx = R.size(0), ny = R.size(1), nz = R.size(2);
+  std::vector<double> kk_delta;
+  if (fix_kk)
+    std::sort(kk_modes_.begin(), kk_modes_.end(), [](const kk_mode &a, const kk_mode &b)
+              { return a.kx != b.kx ? a.kx < b.kx : a.ky < b.ky; });
+  else if (!kk_modes_.empty())
+    kk_delta = kk_correction(level, nx, ny, nz, {2 * long(origin[0]) + e[0], 2 * long(origin[1]) + e[1], 2 * long(origin[2]) + e[2]});
+
   // unit variance per cell
   const double norm = 1.0 / std::sqrt(ntot);
-  const int nx = R.size(0), ny = R.size(1), nz = R.size(2);
   double sum = 0.0, sum2 = 0.0;
 #pragma omp parallel for reduction(+ : sum, sum2)
   for (int i = 0; i < nx; ++i)
@@ -1035,7 +1056,7 @@ void RNG_panphasia::fill_grid_high_order(int level, DensityGrid<real_t> &R)
       for (int k = 0; k < nz; ++k)
       {
         size_t idx = (size_t((i + e[0]) % n[0]) * n[1] + (j + e[1]) % n[1]) * nzp + (k + e[2]) % n[2];
-        R(i, j, k) = grid[idx] * norm;
+        R(i, j, k) = grid[idx] * norm + (kk_delta.empty() ? 0.0 : kk_delta[(size_t(i) * ny + j) * nz + k]);
         sum += R(i, j, k);
         sum2 += R(i, j, k) * R(i, j, k);
       }
@@ -1046,6 +1067,62 @@ void RNG_panphasia::fill_grid_high_order(int level, DensityGrid<real_t> &R)
   music::ulog.Print("time for high-order PANPHASIA on level %d : %f s", level, get_wtime() - tstart);
   music::ilog << "PANPHASIA level " << level << " mean and variance are" << std::endl
               << "       <p> = " << sum << " | var(p) = " << sum2 << std::endl;
+}
+
+/*
+ * The KK modes are fixed on the periodic top level only. Finer patches would otherwise keep the
+ * unfixed amplitudes in the band where MUSIC blends coarse and fine modes, so the top level's
+ * changes are added to each patch as plane waves of the box. They are summed one axis at a time
+ * over the patch cells, whose first cell sits at absolute index corner on this level.
+ */
+std::vector<double> RNG_panphasia::kk_correction(int level, int nx, int ny, int nz, std::array<long, 3> corner) const
+{
+  const double nlevel = std::ldexp(1.0, level), dphi = 2.0 * M_PI / nlevel;
+
+  // runs of equal (kx, ky) in kk_modes_, and runs of those pairs with equal kx
+  std::vector<size_t> pair_start{0}, kx_start{0};
+  for (size_t m = 1; m < kk_modes_.size(); ++m)
+    if (kk_modes_[m].kx != kk_modes_[m - 1].kx || kk_modes_[m].ky != kk_modes_[m - 1].ky)
+      pair_start.push_back(m);
+  const size_t npair = pair_start.size();
+  pair_start.push_back(kk_modes_.size());
+  for (size_t p = 1; p < npair; ++p)
+    if (kk_modes_[pair_start[p]].kx != kk_modes_[pair_start[p - 1]].kx)
+      kx_start.push_back(p);
+  const size_t nkx = kx_start.size();
+  kx_start.push_back(npair);
+
+  // sum over kz (kz > 0 stands for the conjugate mode as well), then ky, then kx
+  std::vector<std::complex<double>> a(npair * nz), b(nkx * ny * nz);
+#pragma omp parallel for
+  for (size_t p = 0; p < npair; ++p)
+    for (size_t m = pair_start[p]; m < pair_start[p + 1]; ++m)
+      for (int z = 0; z < nz; ++z)
+        a[p * nz + z] += (kk_modes_[m].kz ? 2.0 : 1.0) * kk_modes_[m].dc * std::polar(1.0, dphi * kk_modes_[m].kz * (corner[2] + z));
+
+#pragma omp parallel for
+  for (size_t q = 0; q < nkx; ++q)
+    for (size_t p = kx_start[q]; p < kx_start[q + 1]; ++p)
+      for (int y = 0; y < ny; ++y)
+      {
+        std::complex<double> phase = std::polar(1.0, dphi * kk_modes_[pair_start[p]].ky * (corner[1] + y));
+        for (int z = 0; z < nz; ++z)
+          b[(q * ny + y) * nz + z] += a[p * nz + z] * phase;
+      }
+
+  // the mode amplitudes do not depend on resolution, the real-space field is normalised by sqrt(cells)
+  std::vector<double> delta(size_t(nx) * ny * nz);
+  const double scale = std::pow(nlevel, -1.5);
+#pragma omp parallel for
+  for (int x = 0; x < nx; ++x)
+    for (size_t q = 0; q < nkx; ++q)
+    {
+      std::complex<double> phase = scale * std::polar(1.0, dphi * kk_modes_[pair_start[kx_start[q]]].kx * (corner[0] + x));
+      for (int y = 0; y < ny; ++y)
+        for (int z = 0; z < nz; ++z)
+          delta[(size_t(x) * ny + y) * nz + z] += std::real(b[(q * ny + y) * nz + z] * phase);
+    }
+  return delta;
 }
 
 namespace
