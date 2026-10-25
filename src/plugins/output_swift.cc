@@ -928,9 +928,12 @@ protected:
               double xx[3];
               gh.cell_pos(ilevel, i, j, k, xx);
 
-              // shift particle positions (this has to be done as the same shift
-              // is used when computing the convolution kernel for SPH baryons)
-              xx[coord] += 0.5 * h;
+              // shift fine gas positions (this has to be done as the same shift
+              // is used when computing the convolution kernel for SPH baryons).
+              // Coarse levels only feed the total-matter particles, which stay
+              // at their cell centres.
+              if (ilevel == (int)gh.levelmax())
+                xx[coord] += 0.5 * h;
 
               xx[coord] = (xx[coord] + (*gh.get_grid(ilevel))(i, j, k)) * boxSize;
 
