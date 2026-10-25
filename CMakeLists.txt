@@ -157,7 +157,13 @@ list (APPEND SOURCES
   ${PROJECT_SOURCE_DIR}/ext/panphasia/panphasia_routines.f
   ${PROJECT_SOURCE_DIR}/ext/panphasia/generic_lecuyer.f90
 )
-# target_include_directories(${PRGNAME} PRIVATE ${PROJECT_SOURCE_DIR}/external/panphasia_ho)
+# high-order PANPHASIA (Panph6 descriptors)
+set(PANPHASIA_HO_SOURCES
+  ${PROJECT_SOURCE_DIR}/ext/panphasia_ho/high_order_panphasia_routines.c
+  ${PROJECT_SOURCE_DIR}/ext/panphasia_ho/uniform_rand_threefry4x64.c
+)
+set_source_files_properties(${PANPHASIA_HO_SOURCES} PROPERTIES COMPILE_DEFINITIONS USE_OPENMP)
+list (APPEND SOURCES ${PANPHASIA_HO_SOURCES})
 endif(ENABLE_PANPHASIA)
 
 # project configuration header
