@@ -44,6 +44,20 @@ There is an example parameter file 'example.conf' in the main directory. Possibl
   ./MUSIC ../ics_example.conf
 ```
 
+## PANPHASIA descriptors
+Select PANPHASIA with
+```
+[random]
+generator  = PANPHASIA
+descriptor = [Panph6,L18,(56034,71400,250000),S1,KK1025,CH3774755196,Flamingo_Gpc1]
+```
+Both original `Panph1` descriptors and high-order `Panph6` descriptors (such as FLAMINGO's) are supported; spaces inside the descriptor are ignored. On a uniform grid, `Panph6` white noise is identical to monofonIC's. In zooms each refinement patch is computed on its padded region, and its long-wavelength modes are replaced by those of the coarser level.
+
+For `Panph6` descriptors:
+- the base size `S` must be a power of two;
+- a `KK` limit fixes the amplitudes of all modes with |k|² ≤ KK (in box units) on the top level, so `levelmin` must satisfy 2^(levelmin-1) > √KK, and `fix_mode_amplitude` cannot be used as well;
+- generating the noise needs roughly 200 bytes per cell of the largest padded refinement level.
+
 ## SWIFT output
 
 The `swift` output plugin writes one SWIFT-compatible HDF5 initial-conditions
