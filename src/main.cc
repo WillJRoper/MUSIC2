@@ -22,6 +22,10 @@
 
 #include <thread>
 
+#ifdef USE_MPI
+#include <mpi.h>
+#endif
+
 #include <gsl/gsl_rng.h>
 #include <gsl/gsl_randist.h>
 #include <gsl/gsl_integration.h>
@@ -374,8 +378,15 @@ void output_system_info()
 
 region_generator_plugin *the_region_generator;
 
-int main(int argc, const char *argv[])
+int main(int argc, char *argv[])
 {
+	#ifdef USE_MPI
+	MPI_Init(&argc, &argv);
+	MPI_Comm_rank(MPI_COMM_WORLD, &CONFIG::MPI_task_rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &CONFIG::MPI_task_size);
+	CONFIG::MPI_ok = true;
+	#endif
+
 	const unsigned nbnd = 4;
 
 	unsigned lbase, lmax, lbaseTF;
@@ -403,7 +414,10 @@ int main(int argc, const char *argv[])
 		print_output_plugins();
 
 		std::cerr << "\n In order to run, you need to specify a parameter file!\n\n";
-		exit(0);
+		#ifdef USE_MPI
+		MPI_Finalize();
+		#endif
+		return 0;
 	}
 
 	//------------------------------------------------------------------------------
@@ -424,6 +438,15 @@ int main(int argc, const char *argv[])
 	//... read and interpret config file
 	//------------------------------------------------------------------------------
 	config_file cf(argv[1]);
+	#ifdef USE_MPI
+	if (CONFIG::MPI_task_size > 1 &&
+		cf.get_value<std::string>("output", "format") != "swift") {
+		if (CONFIG::MPI_task_rank == 0)
+			std::cerr << "MPI execution currently supports only output/format=swift.\n";
+		MPI_Finalize();
+		return 1;
+	}
+	#endif
 	std::string tfname, randfname, temp;
 	bool force_shift(false);
 
@@ -470,6 +493,11 @@ int main(int argc, const char *argv[])
 			do_counter_mode = cf.get_value_safe<bool>("setup", "zero_zoom_velocity", false);
 
 	the_cosmo_calc              = std::make_unique<cosmology::calculator>(cf);
+	for (const auto &parameter : the_cosmo_calc->cosmo_param_.get_all()) {
+		std::ostringstream value;
+		value << std::setprecision(17) << parameter.second;
+		cf.insert_value("cosmology", parameter.first, value.str());
+	}
 
 	bool tf_has_velocities = the_cosmo_calc.get()->transfer_function_.get()->tf_has_velocities();
 	//--------------------------------------------------------------------------------------------------------
@@ -1422,5 +1450,9 @@ int main(int argc, const char *argv[])
 
 	cf.dump_to_log();
 
-	return 0;
+	#ifdef USE_MPI
+	MPI_Finalize();
+	#endif
+
+	return bfatal ? 1 : 0;
 }

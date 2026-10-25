@@ -310,6 +310,9 @@ public:
     }
   }
 
+  //! read-only access used to record the stored configuration in output files
+  const std::map<std::string, std::string> &get_all() const { return items_; }
+
   //--- EXCEPTIONS ---
 
   //! runtime error that is thrown if key is not found in get_value

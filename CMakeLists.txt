@@ -63,15 +63,26 @@ endif()
 find_package(Threads REQUIRED)
 
 ########################################################################################################################
+# MPI support. MUSIC's legacy calculation remains replicated on every rank;
+# the SWIFT writer partitions the completed particle arrays for parallel I/O.
+option(ENABLE_MPI "Enable MPI support" ON)
+if(ENABLE_MPI)
+  find_package(MPI COMPONENTS CXX)
+  if(NOT MPI_CXX_FOUND)
+    message(STATUS "MPI not found: building without MPI support")
+  endif()
+endif()
+
+########################################################################################################################
 # FFTW
 if(POLICY CMP0074)
     cmake_policy(SET CMP0074 NEW)
 endif()
-if(ENABLE_MPI)
+if(ENABLE_MPI AND MPI_CXX_FOUND)
   find_package(FFTW3 COMPONENTS SINGLE DOUBLE LONGDOUBLE OPENMP THREADS MPI)
 else()
   find_package(FFTW3 COMPONENTS SINGLE DOUBLE LONGDOUBLE OPENMP THREADS)
-endif(ENABLE_MPI)
+endif()
 mark_as_advanced(FFTW3_SINGLE_MPI_LIBRARY FFTW3_SINGLE_OPENMP_LIBRARY FFTW3_SINGLE_SERIAL_LIBRARY FFTW3_SINGLE_THREADS_LIBRARY)
 mark_as_advanced(FFTW3_DOUBLE_MPI_LIBRARY FFTW3_DOUBLE_OPENMP_LIBRARY FFTW3_DOUBLE_SERIAL_LIBRARY FFTW3_DOUBLE_THREADS_LIBRARY)
 mark_as_advanced(FFTW3_LONGDOUBLE_MPI_LIBRARY FFTW3_LONGDOUBLE_OPENMP_LIBRARY FFTW3_LONGDOUBLE_SERIAL_LIBRARY FFTW3_LONGDOUBLE_THREADS_LIBRARY)
@@ -159,6 +170,11 @@ add_executable(${PRGNAME} ${SOURCES} ${PLUGINS})
 
 set_target_properties(${PRGNAME} PROPERTIES CXX_STANDARD 17)
 
+if(ENABLE_MPI AND MPI_CXX_FOUND)
+  target_link_libraries(${PRGNAME} PRIVATE MPI::MPI_CXX)
+  target_compile_definitions(${PRGNAME} PRIVATE "USE_MPI")
+endif()
+
 if(CODE_PRECISION STREQUAL "FLOAT")
   if(FFTW3_SINGLE_THREADS_FOUND)
     target_link_libraries(${PRGNAME} PRIVATE FFTW3::FFTW3_SINGLE_THREADS)
@@ -187,6 +203,12 @@ if(HDF5_FOUND)
   target_include_directories(${PRGNAME} PRIVATE ${HDF5_INCLUDE_DIRS})
   target_compile_options(${PRGNAME} PRIVATE "-DHAVE_HDF5")
   target_compile_options(${PRGNAME} PRIVATE "-DH5_USE_16_API")
+  if(ENABLE_MPI AND MPI_CXX_FOUND AND HDF5_IS_PARALLEL)
+    target_compile_definitions(${PRGNAME} PRIVATE "USE_PARALLEL_HDF5")
+    message(STATUS "HDF5 has parallel support: using collective I/O for SWIFT output")
+  elseif(ENABLE_MPI AND MPI_CXX_FOUND)
+    message(STATUS "Serial HDF5: MPI ranks will take turns writing SWIFT output")
+  endif()
 endif(HDF5_FOUND)
 
 if(TIRPC_FOUND)
@@ -223,4 +245,3 @@ if(APPLE)
     set(SHARED_LINKER_FLAGS "${SHARED_LINKER_FLAGS} -Wl,-keep_dwarf_unwind")
     set(MODULE_LINKER_FLAGS "${MODULE_LINKER_FLAGS} -Wl,-keep_dwarf_unwind")
 endif()
-

@@ -85,6 +85,9 @@ namespace cosmology
         //! shortcut get routine for cosmological parameter key-value pairs through bracket operator
         inline double& operator[](const std::string &key) { return this->get(key); }
 
+        //! Read-only access to all effective cosmological parameters.
+        const std::map<std::string, double> &get_all() const { return pmap_; }
+
         //! default constructor does nothing
         parameters() {}
 

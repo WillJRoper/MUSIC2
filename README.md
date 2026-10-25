@@ -44,8 +44,48 @@ There is an example parameter file 'example.conf' in the main directory. Possibl
   ./MUSIC ../ics_example.conf
 ```
 
+## SWIFT output
+
+The `swift` output plugin writes one SWIFT-compatible HDF5 initial-conditions
+file. Particle floating-point fields are always double precision. Every
+particle type is stably sorted into a regular grid of SWIFT top-level cells;
+the corresponding `/Cells` metadata allows SWIFT and
+[swiftsimio](https://swiftsimio.readthedocs.io/) to load spatial subsets.
+
+```ini
+[output]
+format = swift
+filename = ics_swift.hdf5
+swift_longids = yes
+top_level_cells = 32
+```
+
+`top_level_cells` is number of cells along each axis (default 32, valid range
+1-1290). Larger values improve spatial selectivity but increase metadata as its
+cube. Output is always one shared file. When MUSIC is built with MPI and
+parallel HDF5, ranks write collectively to disjoint hyperslabs; with serial
+HDF5, ranks take turns writing their ranges. MUSIC's current SWIFT tree uses
+whole-box geometry for every particle type, including zoom high-resolution and
+background particles.
+
+The file also records:
+
+- `/Cells/{Counts,OffsetsInFile,Files,MinPositions,MaxPositions}` for every particle type;
+- SWIFT unit exponents on every particle dataset;
+- `/ICs_parameters/Config`, containing every stored MUSIC option;
+- `/ICs_parameters/Cosmology`, `/Build`, and `/Derived` provenance;
+- `/ICs_parameters/InputPowerSpectrum`, containing MUSIC's sampled input table;
+- corrected scale factor, three-component box size, seven particle-type counts, and zero `MassTable` values in `/Header`.
+
+All masses are written per particle, including single-level background dark
+matter. `/Cells/MinPositions` and `MaxPositions` contain geometric cell bounds,
+not particle extrema, so masked reads do not require padding.
+
+Enable MPI for the parallel writer with `-DENABLE_MPI=ON`. Collective writes
+are enabled automatically only when detected HDF5 library has parallel
+support. Use `python3 tests/scripts/check_swift_cells.py ics_swift.hdf5` to
+check cell counts, offsets, ordering, and (when installed) swiftsimio loading.
+
 
 ## Disclaimer
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. By downloading and using MUSIC, you agree to the LICENSE, distributed with the source code in a text file of the same name.
-
-

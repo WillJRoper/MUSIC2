@@ -210,7 +210,13 @@ inline void HDFReadDataset( const std::string Filename, const std::string ObjNam
   }
 
   //... read the dataset
-  H5Dread( HDF_DatasetID, HDF_Type, H5S_ALL, H5S_ALL, H5P_DEFAULT, &Data[0] );
+  if( H5Dread( HDF_DatasetID, HDF_Type, H5S_ALL, H5S_ALL, H5P_DEFAULT, &Data[0] ) < 0 ){
+    H5Sclose( HDF_DataspaceID );
+    H5Dclose( HDF_DatasetID );
+    H5Fclose( HDF_FileID );
+    delete[] dimsize;
+    throw HDFException("Failed to read HDF5 dataset '" + ObjName + "'.");
+  }
 
   if( Data.size() != HDF_StorageSize ){
     std::cerr << " - Error: something went wrong while reading!\n\n";
@@ -875,7 +881,7 @@ inline void HDFWriteDatasetVector( const std::string Filename, const std::string
   }
 
   HDF_DataspaceID         = H5Screate_simple(2, HDF_Dims, NULL);
-  HDF_DatasetID           = H5Dcreate( HDF_FileID, ObjName.c_str(), H5T_NATIVE_FLOAT,
+  HDF_DatasetID           = H5Dcreate( HDF_FileID, ObjName.c_str(), HDF_Type,
                                        HDF_DataspaceID, H5P_DEFAULT );
   H5Dwrite( HDF_DatasetID, HDF_Type, H5S_ALL, H5S_ALL,
             H5P_DEFAULT, &Data[0] );
