@@ -18,11 +18,61 @@
 #ifndef __OUTPUT_HH
 #define __OUTPUT_HH
 
+#include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <map>
 
 #include "general.hh"
 #include "mesh.hh"
+
+/*!
+ * @class particle_load_mask
+ * @brief masked simple cubic particle load on the finest level (as 'ParticleLoad = masked' in monofonIC)
+ *
+ * Every 2x2x2 block of finest-level cells carries one gas particle at the block centre (the cell
+ * opposite the corner) and DM at the corner, plus the edge centres (ParticleMaskType bit 0) and/or
+ * the face centres (bit 1). Remaining cells are left empty. Without baryons the load is plain SC.
+ * Indices are local to the finest grid, which the refinement mask always fills in aligned 2x2x2 blocks.
+ */
+class particle_load_mask
+{
+	int mask_[8]; // 0 = DM, 1 = gas, -1 = empty
+
+	int value(size_t i, size_t j, size_t k) const
+	{
+		return mask_[((i % 2) * 2 + j % 2) * 2 + k % 2];
+	}
+
+public:
+	bool enabled;
+
+	explicit particle_load_mask(config_file &cf)
+	{
+		enabled = cf.get_value_safe<std::string>("setup", "ParticleLoad", "sc") == "masked" &&
+				  cf.get_value_safe<bool>("setup", "baryons", false);
+
+		unsigned mask_type = cf.get_value_safe<unsigned>("setup", "ParticleMaskType", 3);
+		if (mask_type > 3)
+			throw std::runtime_error("ParticleMaskType must be 0, 1, 2 or 3");
+
+		for (auto &m : mask_)
+			m = -1;
+		mask_[0] = 0; // DM at corner
+		if (mask_type & 1)
+			mask_[1] = mask_[2] = mask_[4] = 0; // DM at edge centres
+		if (mask_type & 2)
+			mask_[3] = mask_[5] = mask_[6] = 0; // DM at face centres
+		mask_[7] = 1; // gas at block centre
+	}
+
+	bool is_dm(size_t i, size_t j, size_t k) const { return !enabled || value(i, j, k) == 0; }
+	bool is_gas(size_t i, size_t j, size_t k) const { return !enabled || value(i, j, k) == 1; }
+
+	//! fraction of finest-level cells holding a DM / gas particle
+	double dm_fraction() const { return enabled ? std::count(mask_, mask_ + 8, 0) / 8.0 : 1.0; }
+	double gas_fraction() const { return enabled ? 1.0 / 8.0 : 1.0; }
+};
 
 
 /*!

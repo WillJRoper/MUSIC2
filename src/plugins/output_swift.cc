@@ -94,7 +94,11 @@ protected:
   int rank_, nranks_;
 
   size_t npfine, npart, npcoarse;
+  size_t npfine_dm, npfine_gas; // finest-level particles per species (differ from npfine for masked loads)
   std::vector<size_t> levelcounts;
+
+  //! Masked particle load ('ParticleLoad = masked'); disabled means one DM and one gas particle per fine cell.
+  particle_load_mask pmask;
 
   // parameter file hints
   int pmgrid, gridboost;
@@ -250,7 +254,7 @@ protected:
       HDFWriteGroupAttribute(filename, "/ICs_parameters/Derived",
                              "Gas internal energy [(U_L/U_t)^2]", energy);
       HDFWriteGroupAttribute(filename, "/ICs_parameters/Derived", "Gas smoothing length [U_L]",
-                             boxSize * posFac / std::pow(2, levelmax_));
+                             gas_smoothing_length());
     }
 
     std::ifstream powerspectrum("input_powerspec.txt");
@@ -683,30 +687,40 @@ protected:
 
     if (levelmax_ != levelmin_) // multimass
       npcoarse = gh.count_leaf_cells(gh.levelmin(), gh.levelmax() - 1);
+
+    // exact, since the finest level always consists of whole 2x2x2 blocks
+    npfine_dm = llround(npfine * pmask.dm_fraction());
+    npfine_gas = llround(npfine * pmask.gas_fraction());
+  }
+
+  //! Mean gas interparticle spacing (two fine cells for masked loads).
+  double gas_smoothing_length() const {
+    return boxSize * posFac / std::pow(2, levelmax_) / std::cbrt(pmask.gas_fraction());
   }
 
   template <typename T> void __write_dm_mass(const grid_hierarchy &gh) {
     countLeafCells(gh);
 
-    // Fine particles: assign one mass from the finest-grid cell volume.
+    // Fine particles: the species' mass in a fine cell, spread over the cells
+    // it occupies for masked loads.
     int ilevel = gh.levelmax();
+    const double omega_dm = doBaryons ? omega0 - omega_b : omega0;
+    const T fine_mass = omega_dm * rhoCrit * pow(boxSize * posFac, 3.0) / pow(2, 3 * levelmax_) /
+                        pmask.dm_fraction();
 
-    std::vector<T> data(npfine);
+    std::vector<T> data(npfine_dm);
     size_t count = 0;
 
     for (unsigned i = 0; i < gh.get_grid(ilevel)->size(0); ++i)
       for (unsigned j = 0; j < gh.get_grid(ilevel)->size(1); ++j)
         for (unsigned k = 0; k < gh.get_grid(ilevel)->size(2); ++k)
-          if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k)) {
-            if (!doBaryons)
-                data[count++] = omega0 * rhoCrit * pow(boxSize * posFac, 3.0) / pow(2, 3 * levelmax_);
-            else
-                data[count++] = (omega0 - omega_b) * rhoCrit * pow(boxSize * posFac, 3.0) / pow(2, 3 * levelmax_);
+          if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k) && pmask.is_dm(i, j, k)) {
+            data[count++] = fine_mass;
           }
 
     writeHDF5_a("Masses", HIGHRES_DM_PARTTYPE, data); // write fine DM
 
-    if (count != npfine)
+    if (count != npfine_dm)
       throw std::runtime_error("Internal consistency error while writing fine DM masses");
 
     // fill levelcount for header
@@ -744,11 +758,11 @@ protected:
     hsize_t offset_fine = 0, offset_coarse = 0;
 
     for (unsigned i = 0; i < numFiles; i++) {
-      hsize_t dims_fine = ceil(npfine / numFiles);
+      hsize_t dims_fine = ceil(npfine_dm / numFiles);
       hsize_t dims_coarse = ceil(npcoarse / numFiles);
 
       if (i == numFiles - 1) {
-        dims_fine = npfine - offset_fine;
+        dims_fine = npfine_dm - offset_fine;
         dims_coarse = npcoarse - offset_coarse;
       }
 
@@ -759,19 +773,19 @@ protected:
       offset_coarse += dims_coarse;
     }
 
-    nPartTotal[HIGHRES_DM_PARTTYPE] = npfine;
+    nPartTotal[HIGHRES_DM_PARTTYPE] = npfine_dm;
     nPartTotal[coarsePartType] = npcoarse;
 
     // FINE: collect displacements and convert to absolute coordinates with correct units
     int ilevel = gh.levelmax();
 
-    std::vector<T> data(npfine);
+    std::vector<T> data(npfine_dm);
     size_t count = 0;
 
     for (unsigned i = 0; i < gh.get_grid(ilevel)->size(0); ++i)
       for (unsigned j = 0; j < gh.get_grid(ilevel)->size(1); ++j)
         for (unsigned k = 0; k < gh.get_grid(ilevel)->size(2); ++k)
-          if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k)) {
+          if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k) && pmask.is_dm(i, j, k)) {
             double xx[3];
             gh.cell_pos(ilevel, i, j, k, xx);
 
@@ -783,7 +797,7 @@ protected:
 
     writeHDF5_b("Coordinates", coord, HIGHRES_DM_PARTTYPE, data); // write fine DM
 
-    if (count != npfine)
+    if (count != npfine_dm)
       throw std::runtime_error("Internal consistency error while writing fine DM pos");
 
     // COARSE: collect displacements and convert to absolute coordinates with correct units
@@ -821,19 +835,19 @@ protected:
     // FINE: collect velocities and convert to correct units
     int ilevel = gh.levelmax();
 
-    std::vector<T> data(npfine);
+    std::vector<T> data(npfine_dm);
     size_t count = 0;
 
     for (unsigned i = 0; i < gh.get_grid(ilevel)->size(0); ++i)
       for (unsigned j = 0; j < gh.get_grid(ilevel)->size(1); ++j)
         for (unsigned k = 0; k < gh.get_grid(ilevel)->size(2); ++k)
-          if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k)) {
+          if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k) && pmask.is_dm(i, j, k)) {
             data[count++] = (T)(*gh.get_grid(ilevel))(i, j, k) * velFac;
           }
 
     writeHDF5_b("Velocities", coord, HIGHRES_DM_PARTTYPE, data); // write fine DM
 
-    if (count != npfine)
+    if (count != npfine_dm)
       throw std::runtime_error("Internal consistency error while writing fine DM pos");
 
     // COARSE: collect velocities and convert to correct units
@@ -860,18 +874,19 @@ protected:
   template <typename T> void __write_gas_velocity(int coord, const grid_hierarchy &gh) {
     countLeafCells(gh);
 
-    std::vector<T> gas_data(npart); // read/write gas at all levels from the gh
+    std::vector<T> gas_data(npfine_gas + npcoarse); // read/write gas at all levels from the gh
     size_t count = 0;
 
     for (int ilevel = levelmax_; ilevel >= (int)levelmin_; --ilevel)
       for (unsigned i = 0; i < gh.get_grid(ilevel)->size(0); ++i)
         for (unsigned j = 0; j < gh.get_grid(ilevel)->size(1); ++j)
           for (unsigned k = 0; k < gh.get_grid(ilevel)->size(2); ++k)
-            if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k)) {
+            if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k) &&
+                (ilevel != (int)levelmax_ || pmask.is_gas(i, j, k))) {
               gas_data[count++] = (T)(*gh.get_grid(ilevel))(i, j, k) * velFac;
             }
 
-    if (count != npart)
+    if (count != npfine_gas + npcoarse)
       throw std::runtime_error("Internal consistency error while writing GAS pos");
 
     // calculate modified DM velocities if: multimass and baryons present
@@ -885,13 +900,13 @@ protected:
 
       // overwrite
       for (size_t i = 0; i < npcoarse; i++)
-        dm_data[i] = facc * dm_data[i] + facb * gas_data[npfine + i];
+        dm_data[i] = facc * dm_data[i] + facb * gas_data[npfine_gas + i];
 
       writeHDF5_b("Velocities", coord, coarsePartType, dm_data); // overwrite coarse DM vels
     }                                                            // dm_data deallocated
 
     // restrict gas_data to fine only and request write
-    std::vector<T> data(gas_data.begin() + 0, gas_data.begin() + npfine);
+    std::vector<T> data(gas_data.begin() + 0, gas_data.begin() + npfine_gas);
 
     std::vector<T>().swap(gas_data); // deallocate
 
@@ -905,17 +920,17 @@ protected:
     hsize_t offset = 0;
 
     for (unsigned i = 0; i < numFiles; i++) {
-      hsize_t dims = ceil(npfine / numFiles);
+      hsize_t dims = ceil(npfine_gas / numFiles);
       if (i == numFiles - 1)
-        dims = npfine - offset;
+        dims = npfine_gas - offset;
 
       nPart[GAS_PARTTYPE] = dims;
       offset += dims;
     }
 
-    nPartTotal[GAS_PARTTYPE] = npfine;
+    nPartTotal[GAS_PARTTYPE] = npfine_gas;
 
-    std::vector<double> gas_data(npart); // read/write gas at all levels from the gh
+    std::vector<double> gas_data(npfine_gas + npcoarse); // read/write gas at all levels from the gh
     size_t count = 0;
 
     double h = 1.0 / (1ul << gh.levelmax());
@@ -924,15 +939,16 @@ protected:
       for (unsigned i = 0; i < gh.get_grid(ilevel)->size(0); ++i)
         for (unsigned j = 0; j < gh.get_grid(ilevel)->size(1); ++j)
           for (unsigned k = 0; k < gh.get_grid(ilevel)->size(2); ++k)
-            if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k)) {
+            if (gh.is_in_mask(ilevel, i, j, k) && !gh.is_refined(ilevel, i, j, k) &&
+                (ilevel != (int)gh.levelmax() || pmask.is_gas(i, j, k))) {
               double xx[3];
               gh.cell_pos(ilevel, i, j, k, xx);
 
               // shift fine gas positions (this has to be done as the same shift
-              // is used when computing the convolution kernel for SPH baryons).
-              // Coarse levels only feed the total-matter particles, which stay
-              // at their cell centres.
-              if (ilevel == (int)gh.levelmax())
+              // is used when computing the convolution kernel for SPH baryons);
+              // masked loads use the unshifted lattice. Coarse levels only feed
+              // the total-matter particles, which stay at their cell centres.
+              if (ilevel == (int)gh.levelmax() && !pmask.enabled)
                 xx[coord] += 0.5 * h;
 
               xx[coord] = (xx[coord] + (*gh.get_grid(ilevel))(i, j, k)) * boxSize;
@@ -940,7 +956,7 @@ protected:
               gas_data[count++] = xx[coord];
             }
 
-    if (count != npart)
+    if (count != npfine_gas + npcoarse)
       throw std::runtime_error("Internal consistency error while writing coarse DM pos");
 
     // calculate modified DM coordinates if: multimass and baryons present
@@ -954,7 +970,7 @@ protected:
 
       // overwrite
       for (size_t i = 0; i < npcoarse; i++) {
-        dm_data[i] = facc * dm_data[i] + facb * gas_data[npfine + i];
+        dm_data[i] = facc * dm_data[i] + facb * gas_data[npfine_gas + i];
         dm_data[i] = fmod(dm_data[i] + boxSize, boxSize) * posFac;
       }
 
@@ -964,9 +980,9 @@ protected:
     // restrict gas_data to fine only and request write
     // std::vector<float> data( gas_data.begin() + 0, gas_data.begin() + npfine );
 
-    std::vector<T> data(npfine);
+    std::vector<T> data(npfine_gas);
 
-    for (size_t i = 0; i < npfine; i++)
+    for (size_t i = 0; i < npfine_gas; i++)
       data[i] = (T)(fmod(gas_data[i] + boxSize, boxSize) * posFac);
 
     std::vector<double>().swap(gas_data); // deallocate
@@ -977,12 +993,13 @@ protected:
   template <typename T> void __write_gas_properties(const grid_hierarchy &gh) {
     countLeafCells(gh);
 
-    std::vector<T> masses(npfine);
-    std::vector<T> smoothing_lengths(npfine);
-    std::vector<T> internal_energies(npfine);
+    std::vector<T> masses(npfine_gas);
+    std::vector<T> smoothing_lengths(npfine_gas);
+    std::vector<T> internal_energies(npfine_gas);
 
-    T gas_mass = omega_b * rhoCrit * pow(boxSize * posFac, 3.0) / pow(2, 3 * levelmax_);
-    T smoothing_length = boxSize * posFac / pow(2, levelmax_);
+    T gas_mass = omega_b * rhoCrit * pow(boxSize * posFac, 3.0) / pow(2, 3 * levelmax_) /
+                 pmask.gas_fraction();
+    T smoothing_length = gas_smoothing_length();
 
     // calculate internal energy for gas
     double npol = (fabs(1.0 - gamma) > 1e-7) ? 1.0 / (gamma - 1.) : 1.0;
@@ -997,7 +1014,7 @@ protected:
     T internal_energy = 1.380649e-16 / 1.67262192369e-24 * Tini * npol / mu /
                         UnitVelocity_in_cm_per_s / UnitVelocity_in_cm_per_s;
 
-    for (size_t i = 0; i < npfine; i++){
+    for (size_t i = 0; i < npfine_gas; i++){
       masses[i] = gas_mass;
       smoothing_lengths[i] = smoothing_length;
       internal_energies[i] = internal_energy;
@@ -1018,7 +1035,7 @@ public:
    * `swift_num_files` and `swift_doubleprec` are retained for configuration
    * compatibility but do not change those requirements.
    */
-  swift_output_plugin(config_file &cf) : output_plugin(cf) {
+  swift_output_plugin(config_file &cf) : output_plugin(cf), pmask(cf) {
 #ifdef USE_MPI
     MPI_Comm_rank(MPI_COMM_WORLD, &rank_);
     MPI_Comm_size(MPI_COMM_WORLD, &nranks_);

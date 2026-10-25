@@ -593,7 +593,11 @@ int main(int argc, char *argv[])
 	bool bdefd = true; // we set this by default and don't allow it to be changed outside any more
 	bool bglass = cf.get_value_safe<bool>("output", "glass", false);
 	bool bsph = cf.get_value_safe<bool>("setup", "do_SPH", false) && do_baryons;
-	bool bbshift = bsph && !bglass;
+	bool bmasked = particle_load_mask(cf).enabled;
+	if (bmasked && (bglass || outformat != "swift"))
+		throw std::runtime_error("ParticleLoad = masked is only supported for output format 'swift' without glass");
+	// masked loads put gas on the unshifted lattice, so baryon fields must not be shifted by half a cell
+	bool bbshift = bsph && !bglass && !bmasked;
 
 	bool kspace = cf.get_value_safe<bool>("poisson", "kspace", false);
 	bool kspace2LPT = kspace;
