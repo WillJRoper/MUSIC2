@@ -454,6 +454,24 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 #endif
+	//... validate the particle load before any plugin uses it, so config errors exit cleanly
+	try
+	{
+		const particle_load_mask pmask(cf);
+		if (pmask.requested && !pmask.enabled)
+			music::wlog.Print("ParticleLoad = masked ignored since baryons are disabled");
+		if (pmask.enabled && (cf.get_value_safe<bool>("output", "glass", false) ||
+							  cf.get_value<std::string>("output", "format") != "swift"))
+			throw std::runtime_error("ParticleLoad = masked is only supported for output format 'swift' without glass");
+	}
+	catch (std::runtime_error &excp)
+	{
+		music::elog.Print("%s", excp.what());
+#ifdef USE_MPI
+		MPI_Finalize();
+#endif
+		return 1;
+	}
 	std::string tfname, randfname, temp;
 	bool force_shift(false);
 
@@ -593,14 +611,8 @@ int main(int argc, char *argv[])
 	bool bdefd = true; // we set this by default and don't allow it to be changed outside any more
 	bool bglass = cf.get_value_safe<bool>("output", "glass", false);
 	bool bsph = cf.get_value_safe<bool>("setup", "do_SPH", false) && do_baryons;
-	const particle_load_mask pmask(cf);
-	bool bmasked = pmask.enabled;
-	if (pmask.requested && !bmasked)
-		music::wlog.Print("ParticleLoad = masked ignored since baryons are disabled");
-	if (bmasked && (bglass || outformat != "swift"))
-		throw std::runtime_error("ParticleLoad = masked is only supported for output format 'swift' without glass");
 	// masked loads put gas on the unshifted lattice, so baryon fields must not be shifted by half a cell
-	bool bbshift = bsph && !bglass && !bmasked;
+	bool bbshift = bsph && !bglass && !particle_load_mask(cf).enabled;
 
 	bool kspace = cf.get_value_safe<bool>("poisson", "kspace", false);
 	bool kspace2LPT = kspace;

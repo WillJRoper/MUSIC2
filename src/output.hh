@@ -51,8 +51,9 @@ public:
 	explicit particle_load_mask(config_file &cf)
 	{
 		const std::string load = cf.get_value_safe<std::string>("setup", "ParticleLoad", "sc");
-		if (load != "sc" && load != "masked")
-			throw std::runtime_error("ParticleLoad must be 'sc' or 'masked', got '" + load + "'");
+		// other formats never read ParticleLoad, so monofonIC-style values are only rejected for swift
+		if (load != "sc" && load != "masked" && cf.get_value<std::string>("output", "format") == "swift")
+			throw std::runtime_error("ParticleLoad must be 'sc' or 'masked' for swift output, got '" + load + "'");
 		requested = load == "masked";
 		enabled = requested && cf.get_value_safe<bool>("setup", "baryons", false);
 
