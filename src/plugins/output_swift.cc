@@ -723,10 +723,11 @@ protected:
     if (count != npfine_dm)
       throw std::runtime_error("Internal consistency error while writing fine DM masses");
 
-    // fill levelcount for header
+    // fill levelcount for header: DM particles per level, finest first
     levelcounts = std::vector<size_t>(levelmax_ - levelmin_ + 1);
     for (int ilevel = gh.levelmax(); ilevel >= (int)gh.levelmin(); --ilevel)
       levelcounts[gh.levelmax() - ilevel] = gh.count_leaf_cells(ilevel, ilevel);
+    levelcounts[0] = npfine_dm;
 
     if (levelmax_ != levelmin_) {
       size_t count = 0;
