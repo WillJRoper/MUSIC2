@@ -19,6 +19,7 @@
 
 #include "HDF_IO.hh"
 #include "cmake_config.hh"
+#include "cosmology_calculator.hh"
 #include "output.hh"
 #include <algorithm>
 #include <cmath>
@@ -30,19 +31,22 @@
 #include <mpi.h>
 #endif
 
+// The legacy output-plugin factory passes config only; main owns initialized
+// cosmology calculator used here to persist the effective (defaulted) values.
+extern std::unique_ptr<cosmology::calculator> the_cosmo_calc;
+
 /**
  * @brief Write SWIFT-compatible HDF5 initial conditions.
  *
- * Particle fields are first written by MUSIC's existing streaming interface.
- * finalize() then applies one stable permutation to every field of each
- * particle type, placing particles in SWIFT top-level-cell order. The /Cells
- * lookup table records each cell's count, file offset, and geometric bounds,
- * enabling SWIFT and swiftsimio to load spatial subsets without scanning the
- * whole file.
+ * MUSIC2 streams grid-derived particle fields one component at a time. This
+ * plugin buffers each field, partitions the replicated arrays across MPI ranks
+ * at finalize(), then applies a stable per-rank cell permutation. Global
+ * per-cell counts and rank offsets produce cell-major, rank-major datasets and
+ * the /Cells lookup table used by SWIFT and swiftsimio.
  *
- * The legacy MUSIC2 writer streams fields one component at a time. This plugin
- * buffers those fields, then partitions each replicated particle array across
- * MPI ranks and writes one globally cell-ordered file.
+ * Parallel HDF5 writes collectively to the shared file. With serial HDF5,
+ * ranks take turns writing disjoint cell hyperslabs. Both modes produce one
+ * file and use whole-box geometry for every particle type.
  */
 class swift_output_plugin : public output_plugin {
 protected:
@@ -77,12 +81,16 @@ protected:
   //! Inverse top-level cell width, matching SWIFT's iwidth.
   double iwidth_;
 
+  //! Full replicated particle fields collected from MUSIC's component-wise API.
   struct particle_buffer {
+    //! Flat (particle, xyz) arrays and scalar fields in MUSIC's original order.
     std::vector<double> coordinates, velocities, masses, smoothing_lengths,
         internal_energies;
+    //! IDs are held wide until the selected on-disk type is written.
     std::vector<unsigned long long> ids;
   } buffers_[NTYPES];
 
+  //! MPI rank layout; {0,1} in a non-MPI build.
   int rank_, nranks_;
 
   size_t npfine, npart, npcoarse;
@@ -96,61 +104,6 @@ protected:
   using output_plugin::cf_;
 
   /**
-   * @brief Test whether an HDF5 object exists without printing expected errors.
-   *
-   * H5Lexists reports an error when an intermediate path component is absent;
-   * probing optional PartType groups therefore temporarily disables HDF5's
-   * automatic error handler.
-   */
-  bool dataset_exists(const std::string &filename, const std::string &name) const {
-    hid_t file = H5Fopen(filename.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
-    herr_t (*oldHandler)(void *);
-    void *oldClientData;
-    H5Eget_auto(&oldHandler, &oldClientData);
-    H5Eset_auto(NULL, NULL);
-    const bool exists = H5Lexists(file, name.c_str(), H5P_DEFAULT) > 0;
-    H5Eset_auto(oldHandler, oldClientData);
-    H5Fclose(file);
-    return exists;
-  }
-
-  /**
-   * @brief Rewrite one particle field using a shared cell-order permutation.
-   *
-   * @tparam T Stored element type.
-   * @param filename HDF5 file containing the field.
-   * @param name Absolute dataset path.
-   * @param permutation Source particle index for each output particle.
-   * @param width Values per particle: three for vectors, one for scalars.
-   */
-  template <typename T>
-  void reorder_dataset(const std::string &filename, const std::string &name,
-                       const std::vector<size_t> &permutation, size_t width = 1) {
-    if (!dataset_exists(filename, name)) {
-      return;
-    }
-
-    std::vector<T> input;
-    HDFReadDataset(filename, name, input);
-    if (input.size() != permutation.size() * width) {
-      throw std::runtime_error("Unexpected size for SWIFT dataset " + name);
-    }
-
-    std::vector<T> output(input.size());
-    for (size_t i = 0; i < permutation.size(); ++i) {
-      for (size_t j = 0; j < width; ++j) {
-        output[i * width + j] = input[permutation[i] * width + j];
-      }
-    }
-
-    hid_t file = H5Fopen(filename.c_str(), H5F_ACC_RDWR, H5P_DEFAULT);
-    hid_t dataset = H5Dopen(file, name.c_str());
-    H5Dwrite(dataset, GetDataType<T>(), H5S_ALL, H5S_ALL, H5P_DEFAULT, output.data());
-    H5Dclose(dataset);
-    H5Fclose(file);
-  }
-
-  /**
    * @brief Attach SWIFT unit exponents to one particle dataset.
    *
    * Current, temperature, and Hubble-factor exponents are zero for every
@@ -159,9 +112,6 @@ protected:
   void write_unit_attributes(const std::string &filename, const std::string &dataset,
                              double mass, double length, double timeExponent,
                              double scaleFactor) {
-    if (!dataset_exists(filename, dataset)) {
-      return;
-    }
     HDFWriteDatasetAttribute(filename, dataset, "U_M exponent", std::vector<double>(1, mass));
     HDFWriteDatasetAttribute(filename, dataset, "U_L exponent", std::vector<double>(1, length));
     HDFWriteDatasetAttribute(filename, dataset, "U_t exponent", std::vector<double>(1, timeExponent));
@@ -169,99 +119,6 @@ protected:
     HDFWriteDatasetAttribute(filename, dataset, "U_T exponent", std::vector<double>(1, 0.0));
     HDFWriteDatasetAttribute(filename, dataset, "a-scale exponent", std::vector<double>(1, scaleFactor));
     HDFWriteDatasetAttribute(filename, dataset, "h-scale exponent", std::vector<double>(1, 0.0));
-  }
-
-  /**
-   * @brief Sort one particle type into cells and write its /Cells lookup data.
-   *
-   * Coordinates are periodically wrapped at stored precision before cell
-   * assignment. A stable counting sort builds one permutation, which is then
-   * applied to coordinates, velocities, masses, IDs, and gas-only fields so
-   * particle rows remain aligned across datasets.
-   *
-   * Cells use SWIFT's flattened index, z + cdim * (y + cdim * x). Counts are
-   * signed 64-bit values and OffsetsInFile is their exclusive prefix sum.
-   *
-   * @tparam T Floating-point type stored in particle datasets.
-   * @param filename Output HDF5 file.
-   * @param partType Gadget/SWIFT particle type index.
-   */
-  template <typename T>
-  void sort_particle_type_and_write_cells(const std::string &filename, unsigned partType) {
-    const std::string group = "/PartType" + std::to_string(partType);
-    const std::string coordinatesName = group + "/Coordinates";
-    if (!dataset_exists(filename, coordinatesName)) {
-      return;
-    }
-
-    std::vector<T> coordinates;
-    HDFReadDataset(filename, coordinatesName, coordinates);
-    const size_t particleCount = coordinates.size() / 3;
-    std::vector<size_t> particleCells(particleCount);
-    std::vector<long long> counts(ncells_, 0), offsets(ncells_, 0);
-
-    // Wrap coordinates and count particles in SWIFT cell_getid order.
-    for (size_t p = 0; p < particleCount; ++p) {
-      size_t index[3];
-      for (size_t d = 0; d < 3; ++d) {
-        double wrapped = std::fmod(static_cast<double>(coordinates[3 * p + d]), dim_);
-        if (wrapped < 0.0) {
-          wrapped += dim_;
-        }
-        coordinates[3 * p + d] = static_cast<T>(wrapped);
-        if (!(coordinates[3 * p + d] < static_cast<T>(dim_))) {
-          coordinates[3 * p + d] = T(0);
-        }
-        index[d] = std::min(static_cast<size_t>(coordinates[3 * p + d] * iwidth_), cdim_ - 1);
-      }
-      particleCells[p] = index[2] + cdim_ * (index[1] + cdim_ * index[0]);
-      ++counts[particleCells[p]];
-    }
-
-    // Build cell offsets and a stable counting-sort permutation.
-    for (size_t cell = 1; cell < ncells_; ++cell) {
-      offsets[cell] = offsets[cell - 1] + counts[cell - 1];
-    }
-    std::vector<long long> next = offsets;
-    std::vector<size_t> permutation(particleCount);
-    for (size_t p = 0; p < particleCount; ++p) {
-      permutation[next[particleCells[p]]++] = p;
-    }
-
-    // Coordinates need wrapping as well as permutation, so write them here.
-    std::vector<T> sortedCoordinates(coordinates.size());
-    for (size_t p = 0; p < particleCount; ++p) {
-      for (size_t d = 0; d < 3; ++d) {
-        sortedCoordinates[3 * p + d] = coordinates[3 * permutation[p] + d];
-      }
-    }
-    hid_t file = H5Fopen(filename.c_str(), H5F_ACC_RDWR, H5P_DEFAULT);
-    hid_t dataset = H5Dopen(file, coordinatesName.c_str());
-    H5Dwrite(dataset, GetDataType<T>(), H5S_ALL, H5S_ALL, H5P_DEFAULT, sortedCoordinates.data());
-    H5Dclose(dataset);
-    H5Fclose(file);
-
-    reorder_dataset<T>(filename, group + "/Velocities", permutation, 3);
-    reorder_dataset<T>(filename, group + "/Masses", permutation);
-    reorder_dataset<T>(filename, group + "/SmoothingLength", permutation);
-    reorder_dataset<T>(filename, group + "/InternalEnergy", permutation);
-    if (useLongIDs) {
-      reorder_dataset<long long>(filename, group + "/ParticleIDs", permutation);
-    } else {
-      reorder_dataset<int>(filename, group + "/ParticleIDs", permutation);
-    }
-
-    const std::string typeName = "PartType" + std::to_string(partType);
-    HDFWriteDataset(filename, "/Cells/Counts/" + typeName, counts);
-    HDFWriteDataset(filename, "/Cells/OffsetsInFile/" + typeName, offsets);
-    HDFWriteDataset(filename, "/Cells/Files/" + typeName, std::vector<int>(ncells_, 0));
-
-    write_unit_attributes(filename, coordinatesName, 0, 1, 0, 1);
-    write_unit_attributes(filename, group + "/Velocities", 0, 1, -1, 0);
-    write_unit_attributes(filename, group + "/Masses", 1, 0, 0, 0);
-    write_unit_attributes(filename, group + "/ParticleIDs", 0, 0, 0, 0);
-    write_unit_attributes(filename, group + "/SmoothingLength", 0, 1, 0, 1);
-    write_unit_attributes(filename, group + "/InternalEnergy", 0, 2, -2, 0);
   }
 
   /**
@@ -314,8 +171,10 @@ protected:
    * @brief Store reproducibility metadata under /ICs_parameters.
    *
    * SWIFT preserves this group in later snapshots. Config contains every
-   * stored option, one subgroup per section; Cosmology records values used
-   * by this writer; Build records compiler and HDF5 versions.
+   * stored option, one subgroup per section; Cosmology records effective
+   * parameter values; Build records compiler and library versions; Derived
+   * records particle/gas values; input spectra and CLASS parameters are copied
+   * when MUSIC generated corresponding sidecar files.
    */
   void write_provenance_metadata(const std::string &filename) {
     // Preserve every stored configuration option exactly as MUSIC sees it.
@@ -337,15 +196,9 @@ protected:
 
     // Record the effective cosmological values consumed by this plugin.
     HDFCreateSubGroup(filename, "ICs_parameters", "Cosmology");
-    for (const auto &item : cf_.get_all()) {
-      const size_t slash = item.first.find('/');
-      if (item.first.substr(0, slash) != "cosmology") continue;
-      std::istringstream valueStream(item.second);
-      double value;
-      valueStream >> value;
-      if (valueStream && valueStream.eof())
-        HDFWriteGroupAttribute(filename, "/ICs_parameters/Cosmology",
-                               item.first.substr(slash + 1), value);
+    for (const auto &parameter : the_cosmo_calc->cosmo_param_.get_all()) {
+      HDFWriteGroupAttribute(filename, "/ICs_parameters/Cosmology",
+                             parameter.first, parameter.second);
     }
 
     // Record enough build information to identify numerical/library changes.
@@ -361,7 +214,7 @@ protected:
                                std::to_string(hdf5Release));
     HDFWriteGroupAttribute(filename, "/ICs_parameters/Build", "MPI Ranks", nranks_);
     HDFWriteGroupAttribute(filename, "/ICs_parameters/Build", "Threads",
-                           cf_.get_value_safe<int>("execution", "NumThreads", 1));
+                           CONFIG::num_threads);
 #ifdef USE_PARALLEL_HDF5
     HDFWriteGroupAttribute(filename, "/ICs_parameters/Build", "HDF5 I/O",
                            std::string("parallel collective"));
@@ -371,6 +224,16 @@ protected:
 #endif
 
     HDFCreateSubGroup(filename, "ICs_parameters", "Derived");
+    const double targetRedshift =
+        cf_.get_value_safe<double>("cosmology", "ztarget", 0.0);
+    HDFWriteGroupAttribute(filename, "/ICs_parameters/Derived", "D+ start",
+                           the_cosmo_calc->get_growth_factor(time));
+    HDFWriteGroupAttribute(
+        filename, "/ICs_parameters/Derived", "D+ target",
+        the_cosmo_calc->get_growth_factor(1.0 / (1.0 + targetRedshift)));
+    HDFWriteGroupAttribute(
+        filename, "/ICs_parameters/Derived", "sigma_8",
+        static_cast<double>(the_cosmo_calc->compute_sigma8()));
     for (unsigned type = 0; type < NTYPES; ++type) {
       const auto &masses = buffers_[type].masses;
       if (masses.empty()) continue;
@@ -384,8 +247,9 @@ protected:
       const double energy = 1.380649e-16 / 1.67262192369e-24 * Tini * npol / mu /
                             UnitVelocity_in_cm_per_s / UnitVelocity_in_cm_per_s;
       HDFWriteGroupAttribute(filename, "/ICs_parameters/Derived", "Gas temperature over mu [K]", Tini / mu);
-      HDFWriteGroupAttribute(filename, "/ICs_parameters/Derived", "Gas internal energy [(km/s)^2]", energy);
-      HDFWriteGroupAttribute(filename, "/ICs_parameters/Derived", "Gas smoothing length [Mpc]",
+      HDFWriteGroupAttribute(filename, "/ICs_parameters/Derived",
+                             "Gas internal energy [(U_L/U_t)^2]", energy);
+      HDFWriteGroupAttribute(filename, "/ICs_parameters/Derived", "Gas smoothing length [U_L]",
                              boxSize * posFac / std::pow(2, levelmax_));
     }
 
@@ -425,8 +289,53 @@ protected:
         }
       }
     }
+
+    // The CLASS transfer-function plugin writes its complete input key/value
+    // list alongside the ICs. Preserve it verbatim as string attributes.
+    if (cf_.get_value_safe<std::string>("cosmology", "transfer", "") ==
+        "CLASS") {
+      std::ifstream classInput("input_class_parameters.ini");
+      if (classInput) {
+        HDFCreateSubGroup(filename, "ICs_parameters", "CLASS");
+        std::string line;
+        while (std::getline(classInput, line)) {
+          const size_t equals = line.find('=');
+          if (equals == std::string::npos)
+            continue;
+          auto trim = [](std::string value) {
+            const size_t first = value.find_first_not_of(" \t\r");
+            const size_t last = value.find_last_not_of(" \t\r");
+            return first == std::string::npos
+                       ? std::string()
+                       : value.substr(first, last - first + 1);
+          };
+          const std::string key = trim(line.substr(0, equals));
+          const std::string value = trim(line.substr(equals + 1));
+          if (!key.empty() && !value.empty())
+            HDFWriteGroupAttribute(filename, "/ICs_parameters/CLASS", key,
+                                   value);
+        }
+      }
+      HDFWriteGroupAttribute(
+          filename, "ICs_parameters", "Target Redshift",
+          cf_.get_value_safe<double>("cosmology", "ztarget", 0.0));
+    }
+
+    // PANPHASIA realizations are identified by their descriptor.
+    if (cf_.get_value_safe<std::string>("random", "generator", "") ==
+        "PANPHASIA") {
+      HDFWriteGroupAttribute(
+          filename, "ICs_parameters", "Descriptor",
+          cf_.get_value<std::string>("random", "descriptor"));
+    }
   }
 
+  /**
+   * @brief Create one full-size particle dataset before rank writes begin.
+   *
+   * Serial HDF5 uses bounded chunks and Fletcher32 checksums. Parallel HDF5
+   * keeps datasets unfiltered so every rank can participate in collective I/O.
+   */
   template <typename T>
   void create_particle_dataset(const std::string &path, size_t particles,
                                size_t width = 1) {
@@ -464,6 +373,14 @@ protected:
     H5Fclose(file);
   }
 
+  /**
+   * @brief Write one field into this rank's disjoint cell hyperslabs.
+   *
+   * localCounts and localOffsets describe the rank's packed cell-sorted buffer;
+   * rankOffsets give the corresponding global file starts. OR selections let
+   * one H5Dwrite cover all populated cells, including empty selections for
+   * ranks with no particles in this species.
+   */
   template <typename T>
   void write_cell_ordered_dataset(hid_t file, const std::string &path,
                                   const std::vector<T> &values,
@@ -509,10 +426,27 @@ protected:
     H5Dclose(dataset);
   }
 
+  /**
+   * @brief Partition, stable-sort, and write one SWIFT particle type.
+   *
+   * Each rank receives a contiguous slice of MUSIC's replicated global
+   * particle list. Per-cell Allreduce and Exscan results establish global
+   * cell offsets and rank-specific file ranges. Sorting is stable inside each
+   * rank, so resulting file order is cell-major then rank-major.
+   */
   void write_particle_type(unsigned type) {
     particle_buffer &buffer = buffers_[type];
     const size_t total = buffer.coordinates.size() / 3;
     if (!total) return;
+    if (buffer.coordinates.size() % 3 != 0 ||
+        buffer.velocities.size() != 3 * total ||
+        buffer.masses.size() != total || buffer.ids.size() != total ||
+        (type == GAS_PARTTYPE && doBaryons &&
+         (buffer.smoothing_lengths.size() != total ||
+          buffer.internal_energies.size() != total))) {
+      throw std::runtime_error("Incomplete SWIFT particle fields for PartType" +
+                               std::to_string(type));
+    }
     const size_t begin = total * static_cast<size_t>(rank_) / nranks_;
     const size_t end = total * static_cast<size_t>(rank_ + 1) / nranks_;
     const size_t local = end - begin;
@@ -633,6 +567,13 @@ protected:
 #endif
   }
 
+  /**
+   * @brief Have rank zero create the shared file, particle datasets, and
+   * /Cells.
+   *
+   * All particle counts are known from the completed streaming callbacks.
+   * Other ranks wait at the finalize barrier before opening the file to write.
+   */
   void prepare_output_file() {
     if (rank_ != 0) return;
     HDFCreateFile(fname_);
@@ -657,7 +598,12 @@ protected:
     create_cell_tree(fname_);
   }
 
-  // Store scalar fields until finalize writes the shared, cell-ordered file.
+  /**
+   * @brief Buffer a scalar component from MUSIC's streaming callback.
+   *
+   * IDs are filled after all particle counts are known; other scalar fields
+   * are generated by the mass and gas-property callbacks.
+   */
   template <typename T>
   void writeHDF5_a(const std::string &fieldName, int partTypeNum,
                    const std::vector<T> &data) {
@@ -675,7 +621,12 @@ protected:
     }
   }
 
-  // Store one component of an Nx3 field; reads support baryon corrections.
+  /**
+   * @brief Buffer one xyz component, or return a buffered component for mixing.
+   *
+   * Coarse DM's baryon-relative velocity and displacement corrections read
+   * the coarse array before replacing it; readFlag preserves that behavior.
+   */
   template <typename T>
   void writeHDF5_b(const std::string &fieldName, int coord, int partTypeNum,
                    std::vector<T> &data, bool readFlag = false) {
@@ -737,7 +688,7 @@ protected:
   template <typename T> void __write_dm_mass(const grid_hierarchy &gh) {
     countLeafCells(gh);
 
-    // FINE: collect velocities and convert to correct units
+    // Fine particles: assign one mass from the finest-grid cell volume.
     int ilevel = gh.levelmax();
 
     std::vector<T> data(npfine);
@@ -1056,13 +1007,23 @@ protected:
 
 public:
   /**
-   * @brief Initialise SWIFT units, cell geometry, and output groups.
+   * @brief Initialise SWIFT units, cell geometry, and output configuration.
    *
    * `output/top_level_cells` defaults to 32 and must lie in [1, 1290].
    * The upper bound keeps cdim^3 inside the signed 32-bit `nr_cells`
-   * attribute. SWIFT output is always one file and double precision.
+   * attribute. SWIFT output is always one file and double precision;
+   * `swift_num_files` and `swift_doubleprec` are retained for configuration
+   * compatibility but do not change those requirements.
    */
   swift_output_plugin(config_file &cf) : output_plugin(cf) {
+#ifdef USE_MPI
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank_);
+    MPI_Comm_size(MPI_COMM_WORLD, &nranks_);
+#else
+    rank_ = 0;
+    nranks_ = 1;
+#endif
+
     // ensure that everyone knows we want to do SPH, implies: bsph=1, bbshift=1, decic_baryons=1
     // -> instead of just writing gas densities (which are here ignored), the gas displacements are also written
     cf.insert_value("setup", "do_SPH", "yes");
@@ -1085,7 +1046,7 @@ public:
     useLongIDs = cf.get_value_safe<bool>("output", "swift_longids", true);
     numFiles = cf.get_value_safe<unsigned>("output", "swift_num_files", 1);
     cdim_ = cf.get_value_safe<size_t>("output", "top_level_cells", 32);
-    if (numFiles != 1)
+    if (numFiles != 1 && rank_ == 0)
       music::wlog.Print("SWIFT : swift_num_files ignored; one shared file is required by cell metadata");
     numFiles = 1;
     if (cdim_ == 0 || cdim_ > 1290) {
@@ -1160,15 +1121,10 @@ public:
     if (coarsePartType == STAR_PARTTYPE)
       music::wlog.Print("WARNING: Specified coarse particle type will collide with stars if USE_SFR enabled.");
 
-    music::ilog.Print("SWIFT : sorting particles into %zu^3 top-level cells of width %.4g output length units",
-                      cdim_, cell_width_);
-#ifdef USE_MPI
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank_);
-    MPI_Comm_size(MPI_COMM_WORLD, &nranks_);
-#else
-    rank_ = 0;
-    nranks_ = 1;
-#endif
+    if (rank_ == 0)
+      music::ilog.Print("SWIFT : sorting particles into %zu^3 top-level cells "
+                        "of width %.4g output length units",
+                        cdim_, cell_width_);
 #ifdef USE_PARALLEL_HDF5
     if (rank_ == 0) music::ilog.Print("SWIFT : collective parallel HDF5 output on %d rank(s)", nranks_);
 #else
@@ -1335,14 +1291,15 @@ public:
       HDFWriteGroupAttribute(filename, "Cosmology", "Omega_cdm", std::vector<double>(1, omega0 - omega_b));
       HDFWriteGroupAttribute(filename, "Cosmology", "Omega_lambda", std::vector<double>(1, omega_L));
       HDFWriteGroupAttribute(filename, "Cosmology", "Omega_m", std::vector<double>(1, omega0));
+      const cosmology::parameters &cosmology = the_cosmo_calc->cosmo_param_;
       HDFWriteGroupAttribute(filename, "Cosmology", "Omega_r",
-                             std::vector<double>(1, cf_.get_value_safe<double>("cosmology", "Omega_r", 0.0)));
+                             std::vector<double>(1, cosmology["Omega_r"]));
       HDFWriteGroupAttribute(filename, "Cosmology", "w_0",
-                             std::vector<double>(1, cf_.get_value_safe<double>("cosmology", "w_0", -1.0)));
+                             std::vector<double>(1, cosmology["w_0"]));
       HDFWriteGroupAttribute(filename, "Cosmology", "w_a",
-                             std::vector<double>(1, cf_.get_value_safe<double>("cosmology", "w_a", 0.0)));
-      HDFWriteGroupAttribute(filename, "Cosmology", "T_CMB_0 [K]", std::vector<double>(1, Tcmb0));
-
+                             std::vector<double>(1, cosmology["w_a"]));
+      HDFWriteGroupAttribute(filename, "Cosmology", "T_CMB_0 [K]",
+                             std::vector<double>(1, cosmology["Tcmb"]));
     }
 
     // give config/parameter file hints

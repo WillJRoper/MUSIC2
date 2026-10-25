@@ -68,6 +68,17 @@ HDF5, ranks take turns writing their ranges. MUSIC's current SWIFT tree uses
 whole-box geometry for every particle type, including zoom high-resolution and
 background particles.
 
+MUSIC2's grid computation is replicated across MPI ranks; SWIFT output splits
+the completed particle fields among ranks during finalization. The legacy
+`swift_num_files` option is ignored because a single file is required for one
+global cell tree. Particle fields are always double precision; `swift_doubleprec`
+does not change output precision. `swift_longids` defaults to `yes`, and
+`swift_coarsetype` defaults to particle type 2. Optional `swift_unitlength`,
+`swift_unitmass`, and `swift_unitvel` set output code units.
+
+Multi-rank runs currently require `output/format = swift`; the other legacy
+output plugins do not support this MPI writer path.
+
 The file also records:
 
 - `/Cells/{Counts,OffsetsInFile,Files,MinPositions,MaxPositions}` for every particle type;
@@ -75,6 +86,8 @@ The file also records:
 - `/ICs_parameters/Config`, containing every stored MUSIC option;
 - `/ICs_parameters/Cosmology`, `/Build`, and `/Derived` provenance;
 - `/ICs_parameters/InputPowerSpectrum`, containing MUSIC's sampled input table;
+- `/ICs_parameters/CLASS` and target redshift for CLASS transfer runs, plus the
+  PANPHASIA descriptor when that RNG is selected;
 - corrected scale factor, three-component box size, seven particle-type counts, and zero `MassTable` values in `/Header`.
 
 All masses are written per particle, including single-level background dark
@@ -84,7 +97,8 @@ not particle extrema, so masked reads do not require padding.
 Enable MPI for the parallel writer with `-DENABLE_MPI=ON`. Collective writes
 are enabled automatically only when detected HDF5 library has parallel
 support. Use `python3 tests/scripts/check_swift_cells.py ics_swift.hdf5` to
-check cell counts, offsets, ordering, and (when installed) swiftsimio loading.
+check cell counts, offsets, ordering, metadata, and (when installed) swiftsimio
+loading. The checker requires `h5py` and `numpy`; `swiftsimio` is optional.
 
 
 ## Disclaimer

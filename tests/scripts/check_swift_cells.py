@@ -13,6 +13,11 @@ def check(path):
         box = f["Header"].attrs["BoxSize"]
         assert len(dimensions) == 3 and dimensions[0] == dimensions[1] == dimensions[2]
         assert np.allclose(box, box[0])
+        header = f["Header"].attrs
+        assert np.isclose(header["Scale-factor"][0], 1.0 / (1.0 + header["Redshift"][0]))
+        assert np.isclose(header["Scale-factor"][0], header["Time"][0])
+        assert f["Cells/Centres"].shape == (int(np.prod(dimensions)), 3)
+        assert np.all(np.asarray(header["MassTable"]) == 0.0)
         cdim = int(dimensions[0])
 
         for key in f:
@@ -24,6 +29,12 @@ def check(path):
             assert cell_counts.sum() == len(coordinates), key
             for field in ("Velocities", "Masses", "ParticleIDs"):
                 assert len(f[f"{key}/{field}"]) == len(coordinates), f"{key}/{field}"
+            if key == "PartType0":
+                for field in ("SmoothingLength", "InternalEnergy"):
+                    assert len(f[f"{key}/{field}"]) == len(coordinates), f"{key}/{field}"
+            for attribute in ("U_M exponent", "U_L exponent", "U_t exponent",
+                              "a-scale exponent", "h-scale exponent"):
+                assert attribute in f[f"{key}/Coordinates"].attrs, f"{key}/Coordinates"
             ids_dtype = f[f"{key}/ParticleIDs"].dtype
             assert ids_dtype.kind == "u" and ids_dtype.itemsize in (4, 8), key
             assert np.array_equal(offsets, np.r_[0, np.cumsum(cell_counts[:-1])]), key
