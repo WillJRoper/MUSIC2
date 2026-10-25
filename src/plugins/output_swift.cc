@@ -944,11 +944,10 @@ protected:
               double xx[3];
               gh.cell_pos(ilevel, i, j, k, xx);
 
-              // shift fine gas positions (this has to be done as the same shift
-              // is used when computing the convolution kernel for SPH baryons);
-              // masked loads use the unshifted lattice. Coarse levels only feed
-              // the total-matter particles, which stay at their cell centres.
-              if (ilevel == (int)gh.levelmax() && !pmask.enabled)
+              // shift particle positions (this has to be done as the same shift
+              // is used when computing the convolution kernel for SPH baryons,
+              // on every level); masked loads use the unshifted lattice
+              if (!pmask.enabled)
                 xx[coord] += 0.5 * h;
 
               xx[coord] = (xx[coord] + (*gh.get_grid(ilevel))(i, j, k)) * boxSize;
