@@ -44,6 +44,13 @@ There is an example parameter file 'example.conf' in the main directory. Possibl
   ./MUSIC ../ics_example.conf
 ```
 
+## Testing
+End-to-end tests in `tests/e2e` run MUSIC on small configurations and check the results: the power spectrum against the input spectrum, 1LPT velocities against displacements, zooms against uniform runs, PANPHASIA mode fixing, the rejection of invalid configurations, and SWIFT output. They need `python3` with numpy and h5py. From the build directory, run
+```
+  ctest -L fast --output-on-failure
+```
+which takes about a minute and also runs in CI. `ctest -L monofonic` compares MUSIC with monofonIC for a `Panph6` descriptor; it is skipped unless `MONOFONIC_EXECUTABLE` points to a monofonIC built with PANPHASIA. Each test is a script that can also be run directly, `python3 tests/e2e/test_x.py path/to/MUSIC workdir`.
+
 ## PANPHASIA descriptors
 Select PANPHASIA with
 ```
