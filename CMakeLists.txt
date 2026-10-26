@@ -251,3 +251,19 @@ if(APPLE)
     set(SHARED_LINKER_FLAGS "${SHARED_LINKER_FLAGS} -Wl,-keep_dwarf_unwind")
     set(MODULE_LINKER_FLAGS "${MODULE_LINKER_FLAGS} -Wl,-keep_dwarf_unwind")
 endif()
+
+########################################################################################################################
+# end-to-end tests (tests/e2e): `ctest -L fast` after building; each test_*.py names its labels
+enable_testing()
+find_program(PYTHON3 python3) # the first python3 on PATH, which needs numpy and h5py
+if(PYTHON3)
+  file(GLOB E2E_TESTS ${PROJECT_SOURCE_DIR}/tests/e2e/test_*.py)
+  foreach(test ${E2E_TESTS})
+    get_filename_component(name ${test} NAME_WE)
+    file(STRINGS ${test} labels REGEX "^# ctest-labels:")
+    string(REGEX REPLACE "^# ctest-labels: *" "" labels "${labels}")
+    add_test(NAME ${name} COMMAND ${PYTHON3} ${test} $<TARGET_FILE:${PRGNAME}> ${CMAKE_CURRENT_BINARY_DIR}/e2e/${name})
+    set_tests_properties(${name} PROPERTIES LABELS "${labels}" SKIP_RETURN_CODE 77 ENVIRONMENT PYTHONDONTWRITEBYTECODE=1)
+  endforeach()
+endif()
+########################################################################################################################
