@@ -424,8 +424,7 @@ int main(int argc, char *argv[])
 	//... open log file
 	//------------------------------------------------------------------------------
 
-	char logfname[128];
-	snprintf(logfname, 128, "%s_log.txt", argv[1]);
+	const std::string logfname = std::string(argv[1]) + "_log.txt";
 #ifdef USE_MPI
 	if (CONFIG::MPI_task_rank == 0)
 		music::logger::set_output(logfname);
@@ -437,7 +436,7 @@ int main(int argc, char *argv[])
 	time_t ltime = time(NULL);
 
 	splash();
-	music::ilog.Print("Opening log file \'%s\'.", logfname);
+	music::ilog.Print("Opening log file \'%s\'.", logfname.c_str());
 	music::ulog.Print("Running %s, version %s", THE_CODE_NAME, THE_CODE_VERSION);
 	music::ulog.Print("Log is for run started %s", asctime(localtime(&ltime)));
 
