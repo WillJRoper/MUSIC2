@@ -17,7 +17,7 @@ MUSIC stops with a message on screen and in `<config>_log.txt`. Common ones:
 | Message | Cause and fix |
 |---|---|
 | `... plug-in '<name>' not found` | misspelt `format`, `transfer`, `generator` or `region`, or that plugin was not built (e.g. PANPHASIA or CLASS switched off, or no HDF5 for `swift`) |
-| `'cosmology/Omega_m' not found` | give `Omega_m`, `Omega_b`, `Omega_L`, `H0` explicitly, even with `ParameterSet` |
+| `cosmology/sigma_8 is required for this transfer function` | transfer functions other than CLASS are normalised to `sigma_8`; set it (also when using a `ParameterSet`, which only gives `A_s`) |
 | `Found levelmin!=levelmax but neither ref_offset nor ref_center was specified` | a `box` zoom needs a position and a size, or set `region` |
 | `ref_dims must be even` | use even `ref_dims` |
 | `ParticleLoad must be 'sc' or 'masked'` | only those two loads exist for SWIFT |

@@ -165,6 +165,8 @@ namespace cosmology
                 for( auto entry : it->second ){
                     pmap_[entry.first] = entry.second;
                 }
+                // sets give A_s, which only CLASS uses; other transfer functions normalise to sigma_8
+                pmap_["sigma_8"] = cf.get_value_safe<double>("cosmology", "sigma_8", -1.0);
             }
 
             //-------------------------------------------------------------------------------
@@ -212,6 +214,32 @@ namespace cosmology
             pmap_["pnorm"] = 0.0;
             pmap_["sqrtpnorm"] = 0.0;
             pmap_["vfact"] = 0.0;
+
+            // output plugins and grid statistics read [cosmology] keys straight from the config, so a
+            // ParameterSet's values are stored there; explicit configs only get the keys those readers
+            // require filled in, so their other defaults (e.g. Tcmb in eisenstein) are unchanged
+            const bool from_set = cf.get_value_safe<std::string>("cosmology", "ParameterSet", "none") != "none";
+            auto store = [&](const std::string &key, double value) {
+                if (!from_set && cf.contains_key("cosmology", key))
+                    return;
+                std::ostringstream ss;
+                ss << std::setprecision(17) << value;
+                cf.insert_value("cosmology", key, ss.str());
+            };
+            store("Omega_m", this->get("Omega_m"));
+            store("Omega_b", this->get("Omega_b"));
+            store("Omega_L", this->get("Omega_DE"));
+            store("H0", this->get("H0"));
+            store("nspec", this->get("n_s"));
+            if (from_set)
+            {
+                store("n_s", this->get("n_s"));
+                store("A_s", this->get("A_s"));
+                store("Tcmb", this->get("Tcmb"));
+                store("YHe", this->get("YHe"));
+                store("w_0", this->get("w_0"));
+                store("w_a", this->get("w_a"));
+            }
 
             music::ilog << "Cosmological parameters are: " << std::endl;
             music::ilog << " h        = " << std::setw(16) << this->get("h");

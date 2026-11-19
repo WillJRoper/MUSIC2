@@ -77,10 +77,16 @@ n_s     = 0.96822
 Optional: `w_0`, `w_a`, `Tcmb`, `YHe`, `N_ur`, `m_nu1..3`, `k_p`. With
 `transfer = CLASS`, `A_s` takes precedence if both `sigma_8` and `A_s` are given.
 
-`ParameterSet = Planck2018EE+BAO+SN` (and the other Planck 2018 sets) fills
-these in for the cosmology code, but other parts of MUSIC (grid statistics, the
-SWIFT writer) still read `Omega_m`, `Omega_b`, `Omega_L` and `H0` directly and
-stop if they are missing. Give those explicitly in either case.
+Or use a predefined set instead of the individual values:
+
+```ini
+[cosmology]
+ParameterSet = Planck2018EE+BAO+SN   # also Planck2018EE, Planck2018EE+BAO, Planck2018EE+SN
+transfer     = CLASS
+```
+
+A set replaces every individual value in `[cosmology]`. Sets give `A_s`, which
+only CLASS uses; with any other transfer function also give `sigma_8`.
 
 ## Transfer functions
 

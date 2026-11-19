@@ -183,6 +183,10 @@ public:
         transfer_function_ = select_transfer_function_plugin(cf, cosmo_param_);
         transfer_function_->intialise();
         if( !transfer_function_->tf_isnormalised_ ){
+            if( cosmo_param_["sigma_8"] <= 0.0 ){
+                music::elog << "This transfer function is normalised to sigma_8: set [cosmology] / sigma_8." << std::endl;
+                throw std::runtime_error("cosmology/sigma_8 is required for this transfer function");
+            }
             cosmo_param_.set("pnorm", this->compute_pnorm_from_sigma8()*Dplus_start_*Dplus_start_ );
             music::ilog << "Fixing PS normalisation from specified sigma8 = " <<  cosmo_param_["sigma_8"] << std::endl;
         }else{

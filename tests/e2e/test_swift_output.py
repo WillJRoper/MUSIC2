@@ -54,6 +54,16 @@ for run in (uniform, zoom):
         check_masses(run, run.output)
         passes(f"{run.name}: cell structure", check_swift_cells.check, run.output)
 
+# a ParameterSet gives the cosmology without Omega_m etc. in the config file
+pset = run_music("swift_pset", setup={**SETUP, "levelmin": 6, "levelmin_TF": 6}, output=SWIFT,
+                 cosmology={"ParameterSet": "Planck2018EE+BAO+SN", "Omega_m": None, "Omega_L": None,
+                            "Omega_b": None, "H0": None, "n_s": None})
+if check(f"{pset.name}: MUSIC runs", pset.ok()):
+    check_masses(pset, pset.output)
+    with h5py.File(pset.output, "r") as f:
+        om, h = f["Header"].attrs["Omega0"], f["Header"].attrs["HubbleParam"]
+    check(f"{pset.name}: header has the set's cosmology", np.isclose(om, 0.3099) and np.isclose(h, 0.67742), f"{om}, {h}")
+
 for mask_type in range(4):
     run = run_music(f"swift_masked{mask_type}", setup={**SETUP, "ParticleLoad": "masked", "ParticleMaskType": mask_type},
                     output=SWIFT)

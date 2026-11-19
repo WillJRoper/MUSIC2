@@ -19,6 +19,8 @@ CASES = {
                   "fix_mode_amplitude cannot be combined with a KK descriptor"),
     "base_size": ({"random": {"generator": "PANPHASIA", "descriptor": "[Panph6,L18,(56034,71400,250000),S3,CH-999,test]"}},
                   "power-of-two base size"),
+    "no_sigma_8": ({"cosmology": {"ParameterSet": "Planck2018EE", "sigma_8": None}},
+                   "cosmology/sigma_8 is required"),
     "check_digit": ({"random": {"generator": "PANPHASIA", "descriptor": FLAMINGO.replace("CH3774755196", "CH3774755197")}},
                     "invalid descriptor"),
 }
