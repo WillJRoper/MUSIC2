@@ -13,6 +13,7 @@ results:
 | `test_panphasia_kk.py` | PANPHASIA `KK` mode fixing |
 | `test_config_errors.py` | invalid configurations are rejected |
 | `test_swift_output.py` | SWIFT output |
+| `test_lagrangian_points.py` | `tools/lagrangian_points.py` output and an ellipsoid zoom built from it |
 | `test_monofonic.py` | MUSIC against monofonIC for a `Panph6` descriptor |
 
 They need `python3` with `numpy` and `h5py`. From the build directory:

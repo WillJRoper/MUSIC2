@@ -1,4 +1,4 @@
-[![CMake on multiple platforms](https://github.com/cosmo-sims/MUSIC/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/cosmo-sims/MUSIC/actions/workflows/cmake-multi-platform.yml)
+[![CMake on multiple platforms](https://github.com/WillJRoper/MUSIC2/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/WillJRoper/MUSIC2/actions/workflows/cmake-multi-platform.yml)
 
 MUSIC v2 - multi-scale cosmological initial conditions
 ======================================================
@@ -20,6 +20,8 @@ Current MUSIC key features include:
 - Requires FFTW3, GSL (and HDF5 for output for some codes)
 
 ## Building MUSIC
+For dependencies, CMake options and a step-by-step SWIFT zoom, see the [Quickstart](docs/quickstart.md).
+
 MUSIC is built with CMake, using an out-of-source build, i.e. you create a build directory, and then configure the code using CMake. Inside the `music` directory, do
 ```
   mkdir build
@@ -47,6 +49,8 @@ There is an example parameter file `ics_example.conf` in the main directory. Pos
 ## Documentation
 The [wiki](https://github.com/cosmo-sims/music/wiki) is the general reference. The [`docs`](docs/README.md) directory covers this fork's additions:
 
+- [Quickstart](docs/quickstart.md): build, first run, and a SWIFT zoom on a halo
+- [Choosing parameters](docs/parameters.md) and [Troubleshooting](docs/troubleshooting.md)
 - [Refinement regions](docs/refinement-regions.md): box, ellipsoid, convex hull and multibox high-resolution regions
 - [SWIFT output](docs/swift-output.md), including the masked particle load
 - [PANPHASIA descriptors](docs/panphasia.md), including high-order `Panph6`

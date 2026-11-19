@@ -96,7 +96,8 @@ Restrictions: only for `swift` output and non-glass loads. `ParticleLoad`
 accepts only `sc` (the default) and `masked`; `masked` is ignored with a
 warning when baryons are disabled.
 
-Check a masked file, generated at a high starting redshift, with
+Check a masked file, generated at a high starting redshift (e.g. `zstart = 1000`,
+which CLASS still allows) so displacements are small, with
 
 ```
 python3 tests/scripts/check_swift_masked.py ics_swift.hdf5 <type> [unmasked.hdf5]

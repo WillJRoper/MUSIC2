@@ -103,6 +103,8 @@ ignores `region_point_shift`.
 
 The usual source is the particles of a target halo traced back to their
 initial (Lagrangian) positions in a uniform-resolution parent run.
+[`tools/lagrangian_points.py`](../tools/lagrangian_points.py) does this for
+SWIFT-style files; see the [Quickstart](quickstart.md#3-zoom-on-a-halo).
 
 ### Re-using points from a previous zoom
 
