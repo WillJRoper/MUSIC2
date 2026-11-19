@@ -17,6 +17,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 
 //! implements general N-dim vectors of arbitrary primtive type with some arithmetic ops
 template <int N, typename T = double>
