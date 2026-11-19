@@ -20,7 +20,7 @@ Current MUSIC key features include:
 - Requires FFTW3, GSL (and HDF5 for output for some codes)
 
 ## Building MUSIC
-While we still supply the old Makefile, using CMake is now the preferred way of building. CMake use out-of-source build, i.e. you create a build directory, and then configure the code using CMake. Inside the `music` directory, do
+MUSIC is built with CMake, using an out-of-source build, i.e. you create a build directory, and then configure the code using CMake. Inside the `music` directory, do
 ```
   mkdir build
   cd build
@@ -39,116 +39,18 @@ This is necessary since Apple's compilers haven't supported OpenMP for years.
 
 
 ## Running
-There is an example parameter file 'example.conf' in the main directory. Possible options are explained in it, it can be run as a simple argument, e.g. from within the build directory:
+There is an example parameter file `ics_example.conf` in the main directory. Possible options are explained in it, it can be run as a simple argument, e.g. from within the build directory:
 ```
   ./MUSIC ../ics_example.conf
 ```
 
-## Testing
-End-to-end tests in `tests/e2e` run MUSIC on small configurations and check the results: the power spectrum against the input spectrum, 1LPT velocities against displacements, zooms against uniform runs, PANPHASIA mode fixing, the rejection of invalid configurations, and SWIFT output. They need `python3` with numpy and h5py. From the build directory, run
-```
-  ctest -L fast --output-on-failure
-```
-which takes about a minute and also runs in CI. `ctest -L monofonic` compares MUSIC with monofonIC for a `Panph6` descriptor; it is skipped unless `MONOFONIC_EXECUTABLE` points to a monofonIC built with PANPHASIA. Each test is a script that can also be run directly, `python3 tests/e2e/test_x.py path/to/MUSIC workdir`.
+## Documentation
+The [wiki](https://github.com/cosmo-sims/music/wiki) is the general reference. The [`docs`](docs/README.md) directory covers this fork's additions:
 
-## PANPHASIA descriptors
-Select PANPHASIA with
-```
-[random]
-generator  = PANPHASIA
-descriptor = [Panph6,L18,(56034,71400,250000),S1,KK1025,CH3774755196,Flamingo_Gpc1]
-```
-Both original `Panph1` descriptors and high-order `Panph6` descriptors (such as FLAMINGO's) are supported; spaces inside the descriptor are ignored. `Panph6` white noise is monofonIC's field sampled at cell centres, where MUSIC places its particles (monofonIC places them at cell corners), on every refinement level. In zooms each refinement patch is computed on its padded region, and its long-wavelength modes are replaced by those of the coarser level.
-
-For `Panph6` descriptors:
-- the base size `S` must be a power of two;
-- a `KK` limit fixes the amplitudes of all modes with |k|² ≤ KK (in box units). This is done on the periodic top level and carried into every refinement level, so `levelmin` must satisfy 2^(levelmin-1) > √KK, and `fix_mode_amplitude` cannot be used as well;
-- generating the noise needs roughly 200 bytes per cell of the largest padded refinement level.
-
-## SWIFT output
-
-The `swift` output plugin writes one SWIFT-compatible HDF5 initial-conditions
-file. Particle floating-point fields are always double precision. Every
-particle type is stably sorted into a regular grid of SWIFT top-level cells;
-the corresponding `/Cells` metadata allows SWIFT and
-[swiftsimio](https://swiftsimio.readthedocs.io/) to load spatial subsets.
-
-```ini
-[output]
-format = swift
-filename = ics_swift.hdf5
-swift_longids = yes
-top_level_cells = 32
-```
-
-`top_level_cells` is number of cells along each axis (default 32, valid range
-1-1290). Larger values improve spatial selectivity but increase metadata as its
-cube. Output is always one shared file. When MUSIC is built with MPI and
-parallel HDF5, ranks write collectively to disjoint hyperslabs; with serial
-HDF5, ranks take turns writing their ranges. MUSIC's current SWIFT tree uses
-whole-box geometry for every particle type, including zoom high-resolution and
-background particles.
-
-MUSIC2's grid computation is replicated across MPI ranks; SWIFT output splits
-the completed particle fields among ranks during finalization. The legacy
-`swift_num_files` option is ignored because a single file is required for one
-global cell tree. Particle fields are always double precision; `swift_doubleprec`
-does not change output precision. `swift_longids` defaults to `yes`, and
-`swift_coarsetype` defaults to particle type 2. Optional `swift_unitlength`,
-`swift_unitmass`, and `swift_unitvel` set output code units.
-
-Multi-rank runs currently require `output/format = swift`; the other legacy
-output plugins do not support this MPI writer path.
-
-The file also records:
-
-- `/Cells/{Counts,OffsetsInFile,Files,MinPositions,MaxPositions}` for every particle type;
-- SWIFT unit exponents on every particle dataset;
-- `/ICs_parameters/Config`, containing every stored MUSIC option;
-- `/ICs_parameters/Cosmology`, `/Build`, and `/Derived` provenance;
-- `/ICs_parameters/InputPowerSpectrum`, containing MUSIC's sampled input table;
-- `/ICs_parameters/CLASS` and target redshift for CLASS transfer runs, plus the
-  PANPHASIA descriptor when that RNG is selected;
-- corrected scale factor, three-component box size, seven particle-type counts, and zero `MassTable` values in `/Header`.
-
-All masses are written per particle, including single-level background dark
-matter. `/Cells/MinPositions` and `MaxPositions` contain geometric cell bounds,
-not particle extrema, so masked reads do not require padding.
-
-Enable MPI for the parallel writer with `-DENABLE_MPI=ON`. Collective writes
-are enabled automatically only when detected HDF5 library has parallel
-support. Use `python3 tests/scripts/check_swift_cells.py ics_swift.hdf5` to
-check cell counts, offsets, ordering, metadata, and (when installed) swiftsimio
-loading. The checker requires `h5py` and `numpy`; `swiftsimio` is optional.
-
-### Masked particle load
-
-By default the high-resolution region holds one dark matter and one gas
-particle per finest-level cell, with the gas staggered by half a cell. With
-baryons enabled, the SWIFT plugin can instead use monofonIC's masked load:
-
-```
-[setup]
-baryons          = yes
-ParticleLoad     = masked
-ParticleMaskType = 3
-```
-
-Each 2x2x2 block of finest-level cells then holds one gas particle in the
-block-centre cell and dark matter in the corner cell plus the edge-centre
-cells (`ParticleMaskType` bit 0) and/or face-centre cells (bit 1), giving
-DM:gas ratios of 1:1, 4:1, 4:1, or 7:1 for types 0 to 3. Gas is not staggered,
-particle masses are scaled so each species keeps its total mass, and the gas
-smoothing length is the 2-cell gas spacing. Coarse levels still hold
-total-matter particles. The masked load is not available for other output
-formats or glass loads; `ParticleLoad` accepts only `sc` (the default) and
-`masked`, and `masked` is ignored with a warning when baryons are disabled.
-
-Use `python3 tests/scripts/check_swift_masked.py ics_swift.hdf5 <type>
-[unmasked.hdf5]` on ICs generated at a high starting redshift to check
-particle counts, gas lattice positions, smoothing lengths, and (given an
-unmasked run with the same seeds) total masses.
-
+- [Refinement regions](docs/refinement-regions.md): box, ellipsoid, convex hull and multibox high-resolution regions
+- [SWIFT output](docs/swift-output.md), including the masked particle load
+- [PANPHASIA descriptors](docs/panphasia.md), including high-order `Panph6`
+- [Testing](docs/testing.md): end-to-end tests (`ctest -L fast`) and SWIFT checkers
 
 ## Disclaimer
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. By downloading and using MUSIC, you agree to the LICENSE, distributed with the source code in a text file of the same name.
