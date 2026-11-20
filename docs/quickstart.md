@@ -96,20 +96,25 @@ unchanged.
    SWIFT-style HDF5 (MUSIC's `swift` output and SWIFT snapshots are). For
    other codes, write `x y z` in box units per line yourself; see
    [Point files](refinement-regions.md#point-files).
-4. **Zoom ICs.** Copy the parent config, raise `levelmax`, and replace the
-   box region with the point file:
+4. **Zoom ICs.** Copy the parent config and change `[setup]`:
 
    ```ini
    [setup]
-   levelmin          = 7    # same as the parent
+   levelmin          = 7
    levelmax          = 10
-   region            = ellipsoid      # or convex_hull
+   padding           = 8
+   region            = ellipsoid
    region_point_file = points.txt
    ```
 
-   `ellipsoid` is the usual choice. `convex_hull` fits elongated regions more
-   tightly. Both handle regions that wrap the periodic boundary. See
-   [Refinement regions](refinement-regions.md).
+   - `levelmin`: same as the parent.
+   - `levelmax`: the zoom resolution.
+   - `padding`: buffer around each level; see
+     [Parameters](parameters.md#zoom-geometry).
+   - `region`: `ellipsoid` is the usual choice; `convex_hull` fits elongated
+     regions more tightly. Both handle regions that wrap the periodic
+     boundary. See [Refinement regions](refinement-regions.md).
+   - `region_point_file`: the file from step 3.
 5. **Run the zoom** in SWIFT. Check that no low-resolution particles end up
    in the halo; if they do, grow the radius in step 3 or the `padding`.
 

@@ -5,64 +5,96 @@ lists every option; [`ics_example.conf`](../ics_example.conf) and
 [`data/ExampleConfigs/swift_zoom.conf`](../data/ExampleConfigs/swift_zoom.conf)
 are working starting points.
 
-## Resolution: `levelmin`, `levelmax`, `levelmin_TF`
+## Resolution
+
+```ini
+[setup]
+boxlength   = 100   # Mpc/h
+levelmin    = 7
+levelmin_TF = 8
+levelmax    = 10
+```
 
 A level `L` is a grid of `2^L` cells per side across the whole box.
 
-- `levelmin`: the base grid, covering the whole box. Its particles are the
-  low-resolution background. Use the parent run's level for zooms.
+- `boxlength`: side of the periodic box in Mpc/h.
+- `levelmin`: the base grid covering the whole box; its particles are the
+  low-resolution background. For a zoom, use the parent run's level.
+- `levelmin_TF`: the level the density field is first computed on, before
+  being restricted to `levelmin`. 1-2 levels above `levelmin` gives accurate
+  large-scale power in zooms. Default `levelmin`; MUSIC raises it to
+  `levelmin` with a warning if set lower.
 - `levelmax`: the finest level, inside the refinement region. The
   high-resolution particle spacing is `boxlength / 2^levelmax`.
-  `levelmin = levelmax` gives uniform-resolution ICs.
-- `levelmin_TF`: the level on which the density field is first computed
-  before being restricted to `levelmin`. Set it 1-2 levels above `levelmin` for
-  accurate large-scale power in zooms; it cannot be below `levelmin` (MUSIC
-  raises it with a warning).
+  `levelmax = levelmin` gives uniform-resolution ICs.
 
-Particle masses follow from the box: one high-resolution particle (DM + gas)
-has mass `Omega_m × ρ_crit × (boxlength / 2^levelmax)^3`. With the
-[masked load](swift-output.md#masked-particle-load) the gas and DM spacings
-differ; MUSIC reports the actual masses in `/ICs_parameters/Derived` of the
-SWIFT file.
+One high-resolution particle (DM + gas) has mass
+`Omega_m × ρ_crit × (boxlength / 2^levelmax)^3`. With the
+[masked load](swift-output.md#masked-particle-load) gas and DM spacings
+differ; the SWIFT file records the actual masses in `/ICs_parameters/Derived`.
 
-Memory and time grow with the size of the largest grid, i.e. the padded
-refinement region at `levelmax` (and the full `2^levelmin_TF` grid). A
-`Panph6` descriptor adds about 200 bytes per cell of the largest padded level.
+Memory and time scale with the largest grid: the padded refinement region at
+`levelmax`, or the full `2^levelmin_TF` grid. A `Panph6` descriptor adds
+about 200 bytes per cell of the largest padded level.
 
-## Zoom geometry: `padding`, `overlap`, region
+## Zoom geometry
 
-- `padding` (required for zooms): extra cells of each coarser level around the
-  level above, so the transition between resolutions sits away from the
-  object. 8 is typical.
-- `overlap` (default 4): extra cells used when solving each refined patch,
-  then discarded. Leave at 4.
-- `align_top = no` lets refinement levels sit anywhere on the coarser grid.
-- The region itself: [Refinement regions](refinement-regions.md).
+```ini
+[setup]
+region    = box
+padding   = 8
+overlap   = 4
+align_top = no
+```
+
+- `region`: the shape of the refinement region; see
+  [Refinement regions](refinement-regions.md).
+- `padding`: cells of each coarser level added around the level above, so
+  resolution transitions sit away from the object. Required for zooms; 8 is
+  typical.
+- `overlap`: extra cells used when solving each refined patch, then
+  discarded. Default 4; leave it.
+- `align_top`: `yes` snaps every level to the coarsest grid's cells; `no`
+  (default) lets levels sit anywhere on the grid above.
 
 ## Starting redshift and LPT order
 
-- `zstart`: start where the largest displacements are still small compared
-  with the finest particle spacing. 2LPT allows a later start than 1LPT:
-  z ≈ 50-127 is common for galaxy-scale zooms with 2LPT, higher for very small
-  boxes or 1LPT.
-- `use_2LPT = yes` adds second-order corrections; use it unless you need 1LPT.
-- `use_LLA = yes` derives the gas density from the local Lagrangian
-  approximation instead of the linear field.
-- With `transfer = CLASS`, `zstart` must be below recombination (about 1088);
-  CLASS fails above it.
+```ini
+[setup]
+zstart   = 127
+use_2LPT = yes
+use_LLA  = no
+```
+
+- `zstart`: start while the largest displacements are still small compared
+  with the finest particle spacing. With 2LPT, z ≈ 50-127 is common for
+  galaxy-scale zooms; go higher for very small boxes or 1LPT. With
+  `transfer = CLASS` it must be below recombination (about 1088).
+- `use_2LPT`: add second-order corrections. Default `no`; use `yes` unless
+  you need 1LPT.
+- `use_LLA`: derive the gas density from the local Lagrangian approximation
+  instead of the linear field. Default `no`.
 
 ## Baryons
 
-`baryons = yes` writes gas as well as dark matter, using separate CDM and
-baryon transfer functions. For SWIFT, gas is placed half a cell from the DM by
-default (`baryon_staggering = 0.5`), or by the
-[masked load](swift-output.md#masked-particle-load). The SWIFT plugin switches
-on `do_SPH` itself, so the gas displacement field is computed at the gas
-positions.
+```ini
+[setup]
+baryons           = yes
+baryon_staggering = 0.5
+```
+
+- `baryons`: write gas as well as dark matter, using separate CDM and baryon
+  transfer functions. Default `no`.
+- `baryon_staggering`: offset of the gas from the DM, in cells. Default 0.5.
+  Ignored with the SWIFT [masked load](swift-output.md#masked-particle-load),
+  which places gas itself.
+
+Gas-writing output plugins, including `swift`, switch on `do_SPH`
+themselves, so the gas displacement field is computed at the gas positions.
 
 ## Cosmology
 
-Set the parameters directly in `[cosmology]`:
+Give the values individually:
 
 ```ini
 [cosmology]
@@ -70,40 +102,76 @@ Omega_m = 0.3099
 Omega_b = 0.048891054
 Omega_L = 0.6901
 H0      = 67.742
-sigma_8 = 0.8102      # or A_s = 2.1064e-9
+sigma_8 = 0.8102
 n_s     = 0.96822
+A_s     = 2.1064e-9
 ```
 
-Optional: `w_0`, `w_a`, `Tcmb`, `YHe`, `N_ur`, `m_nu1..3`, `k_p`. With
-`transfer = CLASS`, `A_s` takes precedence if both `sigma_8` and `A_s` are given.
+- `Omega_m`, `Omega_b`, `Omega_L`: matter, baryon and dark-energy densities.
+- `H0`: Hubble constant in km/s/Mpc.
+- `sigma_8`: normalisation. Required by every transfer function except CLASS.
+- `n_s`: spectral index.
+- `A_s`: primordial amplitude, used only by CLASS; it overrides `sigma_8`
+  there when both are given.
 
-Or use a predefined set instead of the individual values:
+Optional: `w_0`, `w_a`, `Tcmb`, `YHe`, `N_ur`, `m_nu1..3`, `k_p`.
+
+Or use a predefined set:
 
 ```ini
 [cosmology]
-ParameterSet = Planck2018EE+BAO+SN   # also Planck2018EE, Planck2018EE+BAO, Planck2018EE+SN
+ParameterSet = Planck2018EE+BAO+SN
 transfer     = CLASS
+sigma_8      = 0.8102
 ```
 
-A set replaces every individual value in `[cosmology]`. Sets give `A_s`, which
-only CLASS uses; with any other transfer function also give `sigma_8`.
+- `ParameterSet`: one of `Planck2018EE`, `Planck2018EE+BAO`,
+  `Planck2018EE+SN`, `Planck2018EE+BAO+SN`. It replaces every individual value
+  above.
+- `sigma_8`: sets give only `A_s`, so add `sigma_8` for any transfer function
+  other than CLASS.
 
 ## Transfer functions
 
-| `transfer` | Notes |
-|---|---|
-| `CLASS` | computed at run time; needs `ENABLE_CLASS`. Normalised to `sigma_8` (or `A_s`) at `ztarget` (default 0). The CLASS parameters are written to `input_class_parameters.ini` and to the SWIFT file. |
-| `camb_file` | a CAMB transfer table given by `transfer_file`; it must be for `zstart`. Example: `data/EAGLE/Eagle_camb_file.txt`. |
-| `eisenstein` | Eisenstein & Hu fit; no separate baryon field, fine for tests. |
-| `eisenstein_wdm`, `bbks`, `music`, `linger++` | see the wiki. |
+```ini
+[cosmology]
+transfer      = CLASS
+ztarget       = 0
+transfer_file = data/EAGLE/Eagle_camb_file.txt   # camb_file only
+```
+
+`transfer` is one of:
+
+- `CLASS`: computed at run time; needs `ENABLE_CLASS`. Normalised at
+  `ztarget` (default 0). Its input is written to `input_class_parameters.ini`
+  and to the SWIFT file.
+- `camb_file`: the CAMB table in `transfer_file`, which must be for `zstart`.
+- `eisenstein`: Eisenstein & Hu fit; no separate baryon field, fine for
+  tests.
+- `eisenstein_wdm`, `bbks`, `music`, `linger++`: see the wiki.
 
 ## White noise
 
-- `generator = MUSIC` with `seed[L]` per level: MUSIC's own noise. Keep the
-  seeds when changing `levelmax` so structure is preserved.
-- `generator = PANPHASIA` with a `descriptor`: noise fixed independently of
-  the grid, so any code or resolution reproduces the same structure. See
+```ini
+[random]
+generator  = PANPHASIA
+descriptor = [Panph6,L18,(56034,71400,250000),S1,KK1025,CH3774755196,Flamingo_Gpc1]
+```
+
+or
+
+```ini
+[random]
+generator = MUSIC
+seed[7]   = 12345
+seed[8]   = 23456
+```
+
+- `generator = PANPHASIA`: noise set by `descriptor`, independent of the
+  grid, so any code or resolution reproduces the same structure. See
   [PANPHASIA](panphasia.md).
+- `generator = MUSIC`: MUSIC's own noise, with one `seed[L]` per level. Keep
+  the seeds when changing `levelmax` to preserve structure.
 
 ## Files MUSIC writes
 
